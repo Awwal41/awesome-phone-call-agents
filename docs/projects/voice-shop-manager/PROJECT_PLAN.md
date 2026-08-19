@@ -8,6 +8,45 @@
 
 **Devpost deliverables:** PR URL, ~3 min demo video (YouTube/Vimeo), CALL-E account email, optional live demo URL.
 
+**Issue tracker:** https://github.com/Awwal41/awesome-phone-call-agents/issues?q=label%3Avoice-shop-manager
+
+---
+
+## Progress snapshot
+
+_Last updated: 2026-08-19 on branch `feat/shop-voice-manager`_
+
+### Overall
+
+| Area | Done | Open | Owner(s) |
+| --- | ---: | ---: | --- |
+| Agent skill (`skills/shop-voice-checkin/`) | 6 tasks | 2 tasks | Awwal |
+| Python app (`apps/python/shop-voice-manager/`) | 0 tasks | 6 tasks | Rajput |
+| Insights, tests, docs | 0 tasks | 8 tasks | Aranwa |
+| Submission (video, Devpost, upstream PR) | 1 task | 3 tasks | Awwal |
+| Shared integration | 0 tasks | 4 tasks | All |
+
+### Completed deliverables
+
+- [x] `skills/shop-voice-checkin/SKILL.md` — skill workflow and integration notes ([#6](https://github.com/Awwal41/awesome-phone-call-agents/issues/6))
+- [x] `skills/shop-voice-checkin/references/safety.md` — consent and side-effect boundaries ([#6](https://github.com/Awwal41/awesome-phone-call-agents/issues/6))
+- [x] `skills/shop-voice-checkin/references/call-scripts-pidgin.md` and `call-scripts-english.md` ([#7](https://github.com/Awwal41/awesome-phone-call-agents/issues/7))
+- [x] `skills/shop-voice-checkin/references/result-schema-inventory.json` and `result-schema-sales.json` ([#8](https://github.com/Awwal41/awesome-phone-call-agents/issues/8))
+- [x] `skills/shop-voice-checkin/references/examples.md`
+- [x] `skills/shop-voice-checkin/assets/sample-shop-profile.json` and `example-request.template.json` (S1 partial)
+- [x] `docs/projects/voice-shop-manager/DEMO_SCRIPT.md` ([#3](https://github.com/Awwal41/awesome-phone-call-agents/issues/3))
+- [x] Fork + branch `feat/shop-voice-manager` ([#2](https://github.com/Awwal41/awesome-phone-call-agents/issues/2), [#12](https://github.com/Awwal41/awesome-phone-call-agents/issues/12))
+- [x] Repository validation passes for the skill (`python scripts/validate_repository.py`)
+
+### Not started yet
+
+- [ ] `apps/python/shop-voice-manager/` — entire runnable app (Rajput: [#13](https://github.com/Awwal41/awesome-phone-call-agents/issues/13)–[#16](https://github.com/Awwal41/awesome-phone-call-agents/issues/16))
+- [ ] Weekly summary, tests, scheduler doc, India locale (Aranwa: [#17](https://github.com/Awwal41/awesome-phone-call-agents/issues/17)–[#24](https://github.com/Awwal41/awesome-phone-call-agents/issues/24))
+- [ ] Root `README.md` awesome-list entries ([#27](https://github.com/Awwal41/awesome-phone-call-agents/issues/27))
+- [ ] CALL-E auth on dev machine ([#1](https://github.com/Awwal41/awesome-phone-call-agents/issues/1))
+- [ ] Demo video, Devpost, upstream PR ([#4](https://github.com/Awwal41/awesome-phone-call-agents/issues/4), [#5](https://github.com/Awwal41/awesome-phone-call-agents/issues/5), [#9](https://github.com/Awwal41/awesome-phone-call-agents/issues/9))
+- [ ] Live call tests ([#10](https://github.com/Awwal41/awesome-phone-call-agents/issues/10))
+
 ---
 
 ## Two repositories — do not mix them up
@@ -338,57 +377,121 @@ Reference patterns:
 
 ---
 
-## Task assignment
+## Task assignment and issue tracking
 
-**Team:** Awwal (product, CALL-E, skill, demo, submission) · Rajput (Python app core, data layer) · Aranwa (insights, tests, docs, India locale)
+**Team:** Awwal · Rajput · Aranwa
+
+Each task has a GitHub issue on the fork. Filter all project issues:
+
+```text
+https://github.com/Awwal41/awesome-phone-call-agents/issues?q=label%3Avoice-shop-manager
+```
+
+Machine-readable map: [`issue-map.json`](./issue-map.json)
+
+### How collaborators update progress
+
+Use **both** the GitHub issue and (optionally) a short note in this file when major milestones land.
+
+#### When you start a task
+
+1. Open your issue (for example [#13](https://github.com/Awwal41/awesome-phone-call-agents/issues/13)).
+2. Comment: `Starting R3` (use your task ID).
+3. Assign yourself on GitHub if you have access (`Assignees` → your account).
+4. Move only your row to **In progress** in the tables below if you edit this doc.
+
+#### When you open a pull request
+
+1. Branch from `feat/shop-voice-manager`.
+2. Put the issue number in the PR title or body:
+
+```text
+Refs #13
+```
+
+or, when the PR fully completes the task:
+
+```text
+Closes #13
+```
+
+3. Request review from the task partner listed in the Shared table when applicable.
+
+#### When you finish a task
+
+1. Comment on the issue: `Done R3 — merged in #PR_NUMBER` (or describe what landed).
+2. Close the issue (or let `Closes #N` in the PR close it automatically).
+3. Awwal or the issue owner updates the **Progress snapshot** section above on the next plan sync.
+
+#### Status values
+
+| Status | Meaning |
+| --- | --- |
+| **Done** | Merged on `feat/shop-voice-manager` (or closed issue) |
+| **In progress** | Someone commented `Starting …` or opened a linked PR |
+| **Todo** | Not started |
+| **Blocked** | Comment on the issue with `Blocked: reason` |
+
+#### Labels
+
+| Label | Use |
+| --- | --- |
+| `voice-shop-manager` | All hackathon tasks |
+| `awwal` | Awwal-owned tasks |
+| `rajput` | Rajput-owned tasks |
+| `aranwa` | Aranwa-owned tasks |
+
+Rajput and Aranwa: ask Awwal to add you as a **collaborator** on `Awwal41/awesome-phone-call-agents` so GitHub lets you assign yourselves and close issues.
+
+---
 
 ### Awwal
 
-| # | Task | Status |
-| --- | --- | --- |
-| A1 | CALL-E account + API key + MCP auth in Cursor | In progress |
-| A2 | Fork [CALLE-AI/awesome-phone-call-agents](https://github.com/CALLE-AI/awesome-phone-call-agents) (done: `Awwal41/awesome-phone-call-agents`) | Done |
-| A3 | Product narrative + demo script for 3-min video | Done |
-| A4 | Record demo video (preview mode + one live call) | Todo |
-| A5 | Devpost submission (PR URL, video, email) | Todo |
-| A6 | Author `skills/shop-voice-checkin/SKILL.md` + `references/safety.md` | Done |
-| A7 | Write Pidgin/English call scripts in `references/call-scripts-*.md` | Done |
-| A8 | Define result JSON schemas (`result-schema-inventory.json`, `result-schema-sales.json`) | Done |
-| A9 | Open upstream PR to `CALLE-AI/awesome-phone-call-agents` when ready | Todo |
-| A10 | First live inventory + sales call tests (coordinate with Rajput + Aranwa) | Todo |
+| # | Issue | Task | Status |
+| --- | --- | --- | --- |
+| A1 | [#1](https://github.com/Awwal41/awesome-phone-call-agents/issues/1) | CALL-E account + API key + MCP auth in Cursor | In progress |
+| A2 | [#2](https://github.com/Awwal41/awesome-phone-call-agents/issues/2) | Fork [CALLE-AI/awesome-phone-call-agents](https://github.com/CALLE-AI/awesome-phone-call-agents) | Done |
+| A3 | [#3](https://github.com/Awwal41/awesome-phone-call-agents/issues/3) | Product narrative + demo script for 3-min video | Done |
+| A4 | [#4](https://github.com/Awwal41/awesome-phone-call-agents/issues/4) | Record demo video (preview mode + one live call) | Todo |
+| A5 | [#5](https://github.com/Awwal41/awesome-phone-call-agents/issues/5) | Devpost submission (PR URL, video, email) | Todo |
+| A6 | [#6](https://github.com/Awwal41/awesome-phone-call-agents/issues/6) | Author `skills/shop-voice-checkin/SKILL.md` + `references/safety.md` | Done |
+| A7 | [#7](https://github.com/Awwal41/awesome-phone-call-agents/issues/7) | Write Pidgin/English call scripts in `references/call-scripts-*.md` | Done |
+| A8 | [#8](https://github.com/Awwal41/awesome-phone-call-agents/issues/8) | Define result JSON schemas | Done |
+| A9 | [#9](https://github.com/Awwal41/awesome-phone-call-agents/issues/9) | Open upstream PR to `CALLE-AI/awesome-phone-call-agents` | Todo |
+| A10 | [#10](https://github.com/Awwal41/awesome-phone-call-agents/issues/10) | First live inventory + sales call tests | Todo |
 
 ### Rajput
 
-| # | Task | Status |
-| --- | --- | --- |
-| R1 | Clone fork, read this plan, confirm schema + data model | Todo |
-| R2 | Branch `feat/shop-voice-manager` | Done |
-| R3 | Scaffold `apps/python/shop-voice-manager/` (`pyproject.toml`, `client.py`) | Todo |
-| R4 | Implement SQLite `store.py` + schema migrations | Todo |
-| R5 | Wire CALL-E Python SDK (`calle-ai`) — preview default, live opt-in | Todo |
-| R6 | Ingest structured call results into SQLite (inventory + sales) | Todo |
+| # | Issue | Task | Status |
+| --- | --- | --- | --- |
+| R1 | [#11](https://github.com/Awwal41/awesome-phone-call-agents/issues/11) | Clone fork, read this plan, confirm schema + data model | Todo |
+| R2 | [#12](https://github.com/Awwal41/awesome-phone-call-agents/issues/12) | Branch `feat/shop-voice-manager` | Done |
+| R3 | [#13](https://github.com/Awwal41/awesome-phone-call-agents/issues/13) | Scaffold `apps/python/shop-voice-manager/` | Todo |
+| R4 | [#14](https://github.com/Awwal41/awesome-phone-call-agents/issues/14) | Implement SQLite `store.py` + schema migrations | Todo |
+| R5 | [#15](https://github.com/Awwal41/awesome-phone-call-agents/issues/15) | Wire CALL-E Python SDK — preview default, live opt-in | Todo |
+| R6 | [#16](https://github.com/Awwal41/awesome-phone-call-agents/issues/16) | Ingest structured call results into SQLite | Todo |
 
 ### Aranwa
 
-| # | Task | Status |
-| --- | --- | --- |
-| AR1 | Clone fork, read this plan, set up local dev environment | Todo |
-| AR2 | Implement `summarize.py` weekly insights (low stock, capital tied up) | Todo |
-| AR3 | Add pytest + fixtures (no live calls in CI) | Todo |
-| AR4 | Scheduler recipe doc (morning/evening cron + Windows Task Scheduler) | Todo |
-| AR5 | India locale: Hindi-English call script variant + INR `sample-shop-profile` example | Todo |
-| AR6 | Write app `README.md` (setup, side effects, env vars, cancellation) | Todo |
-| AR7 | CLI report formatter — pretty terminal output for weekly summary | Todo |
-| AR8 | Run `python3 scripts/validate_repository.py` before PR | Todo |
+| # | Issue | Task | Status |
+| --- | --- | --- | --- |
+| AR1 | [#17](https://github.com/Awwal41/awesome-phone-call-agents/issues/17) | Clone fork, read this plan, set up local dev environment | Todo |
+| AR2 | [#18](https://github.com/Awwal41/awesome-phone-call-agents/issues/18) | Implement `summarize.py` weekly insights | Todo |
+| AR3 | [#19](https://github.com/Awwal41/awesome-phone-call-agents/issues/19) | Add pytest + fixtures (no live calls in CI) | Todo |
+| AR4 | [#20](https://github.com/Awwal41/awesome-phone-call-agents/issues/20) | Scheduler recipe doc (morning/evening cron + Windows Task Scheduler) | Todo |
+| AR5 | [#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21) | India locale: Hindi-English scripts + INR shop profile | Todo |
+| AR6 | [#22](https://github.com/Awwal41/awesome-phone-call-agents/issues/22) | Write app `README.md` | Todo |
+| AR7 | [#23](https://github.com/Awwal41/awesome-phone-call-agents/issues/23) | CLI report formatter — pretty terminal output | Todo |
+| AR8 | [#24](https://github.com/Awwal41/awesome-phone-call-agents/issues/24) | Run `python3 scripts/validate_repository.py` before PR | Todo |
 
 ### Shared (pair on these)
 
-| # | Task | Owner | Partner |
-| --- | --- | --- | --- |
-| S1 | `example_request.json` + `sample-shop-profile.json` | Awwal (skill templates done) | Rajput copies into app |
-| S2 | Integration test: fixture result → SQLite → summary | Rajput | Aranwa writes assertions |
-| S3 | Root `README.md` list entries for skill + app | Awwal | Aranwa reviews |
-| S4 | `assets/` demo fixtures (fictional call transcripts + results) | Aranwa | Awwal reviews |
+| # | Issue | Task | Owner | Partner |
+| --- | --- | --- | --- | --- |
+| S1 | [#25](https://github.com/Awwal41/awesome-phone-call-agents/issues/25) | `example_request.json` in app (skill templates done) | Awwal | Rajput |
+| S2 | [#26](https://github.com/Awwal41/awesome-phone-call-agents/issues/26) | Integration test: fixture → SQLite → summary | Rajput | Aranwa |
+| S3 | [#27](https://github.com/Awwal41/awesome-phone-call-agents/issues/27) | Root `README.md` list entries for skill + app | Awwal | Aranwa |
+| S4 | [#28](https://github.com/Awwal41/awesome-phone-call-agents/issues/28) | Demo fixtures (fictional transcripts + results) | Aranwa | Awwal |
 
 ---
 
@@ -490,14 +593,14 @@ Same architecture applies:
 
 ## Success criteria for hackathon PR
 
-- [ ] Skill passes `scripts/validate_repository.py`
+- [x] Skill passes `scripts/validate_repository.py`
 - [ ] App has preview default + documented live opt-in
 - [ ] Tests run without CALL-E credentials
-- [ ] No secrets or real phone numbers in git
-- [ ] README entries in root awesome list
-- [ ] Safety + consent documented
-- [ ] One successful live call demonstrated in video
-- [ ] Clear connection to CALL-E SDK/MCP/CLI
+- [x] No secrets or real phone numbers in git (skill assets use masked samples)
+- [ ] README entries in root awesome list ([#27](https://github.com/Awwal41/awesome-phone-call-agents/issues/27))
+- [x] Safety + consent documented
+- [ ] One successful live call demonstrated in video ([#4](https://github.com/Awwal41/awesome-phone-call-agents/issues/4))
+- [x] Clear connection to CALL-E SDK/MCP/CLI (documented in skill)
 
 ---
 
