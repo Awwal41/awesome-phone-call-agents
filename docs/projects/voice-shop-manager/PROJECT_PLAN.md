@@ -348,12 +348,12 @@ Reference patterns:
 | --- | --- | --- |
 | A1 | CALL-E account + API key + MCP auth in Cursor | In progress |
 | A2 | Fork [CALLE-AI/awesome-phone-call-agents](https://github.com/CALLE-AI/awesome-phone-call-agents) (done: `Awwal41/awesome-phone-call-agents`) | Done |
-| A3 | Product narrative + demo script for 3-min video | Todo |
+| A3 | Product narrative + demo script for 3-min video | Done |
 | A4 | Record demo video (preview mode + one live call) | Todo |
 | A5 | Devpost submission (PR URL, video, email) | Todo |
-| A6 | Author `skills/shop-voice-checkin/SKILL.md` + `references/safety.md` | Todo |
-| A7 | Write Pidgin/English call scripts in `references/call-scripts-*.md` | Todo |
-| A8 | Define result JSON schemas (`result-schema-inventory.json`, `result-schema-sales.json`) | Todo |
+| A6 | Author `skills/shop-voice-checkin/SKILL.md` + `references/safety.md` | Done |
+| A7 | Write Pidgin/English call scripts in `references/call-scripts-*.md` | Done |
+| A8 | Define result JSON schemas (`result-schema-inventory.json`, `result-schema-sales.json`) | Done |
 | A9 | Open upstream PR to `CALLE-AI/awesome-phone-call-agents` when ready | Todo |
 | A10 | First live inventory + sales call tests (coordinate with Rajput + Aranwa) | Todo |
 
@@ -385,7 +385,7 @@ Reference patterns:
 
 | # | Task | Owner | Partner |
 | --- | --- | --- | --- |
-| S1 | `example_request.json` + `sample-shop-profile.json` | Awwal | Rajput + Aranwa review |
+| S1 | `example_request.json` + `sample-shop-profile.json` | Awwal (skill templates done) | Rajput copies into app |
 | S2 | Integration test: fixture result → SQLite → summary | Rajput | Aranwa writes assertions |
 | S3 | Root `README.md` list entries for skill + app | Awwal | Aranwa reviews |
 | S4 | `assets/` demo fixtures (fictional call transcripts + results) | Aranwa | Awwal reviews |
