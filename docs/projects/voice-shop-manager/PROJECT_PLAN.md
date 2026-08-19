@@ -340,7 +340,7 @@ Reference patterns:
 
 ## Task assignment
 
-**Team:** Awwal (product, CALL-E, skill, demo, submission) · Rajput (Python app, data layer, tests)
+**Team:** Awwal (product, CALL-E, skill, demo, submission) · Rajput (Python app core, data layer) · Aranwa (insights, tests, docs, India locale)
 
 ### Awwal
 
@@ -355,31 +355,40 @@ Reference patterns:
 | A7 | Write Pidgin/English call scripts in `references/call-scripts-*.md` | Todo |
 | A8 | Define result JSON schemas (`result-schema-inventory.json`, `result-schema-sales.json`) | Todo |
 | A9 | Open upstream PR to `CALLE-AI/awesome-phone-call-agents` when ready | Todo |
-| A10 | First live inventory + sales call tests (with Rajput's app) | Todo |
+| A10 | First live inventory + sales call tests (coordinate with Rajput + Aranwa) | Todo |
 
 ### Rajput
 
 | # | Task | Status |
 | --- | --- | --- |
 | R1 | Clone fork, read this plan, confirm schema + data model | Todo |
-| R2 | Create branch `feat/shop-voice-manager` | Todo |
+| R2 | Branch `feat/shop-voice-manager` | Done |
 | R3 | Scaffold `apps/python/shop-voice-manager/` (`pyproject.toml`, `client.py`) | Todo |
 | R4 | Implement SQLite `store.py` + schema migrations | Todo |
 | R5 | Wire CALL-E Python SDK (`calle-ai`) — preview default, live opt-in | Todo |
 | R6 | Ingest structured call results into SQLite (inventory + sales) | Todo |
-| R7 | Implement `summarize.py` weekly insights (low stock, capital tied up) | Todo |
-| R8 | Add pytest + fixtures (no live calls in CI) | Todo |
-| R9 | Write app `README.md` (setup, side effects, env vars, cancellation) | Todo |
-| R10 | Run `python3 scripts/validate_repository.py` before PR | Todo |
+
+### Aranwa
+
+| # | Task | Status |
+| --- | --- | --- |
+| AR1 | Clone fork, read this plan, set up local dev environment | Todo |
+| AR2 | Implement `summarize.py` weekly insights (low stock, capital tied up) | Todo |
+| AR3 | Add pytest + fixtures (no live calls in CI) | Todo |
+| AR4 | Scheduler recipe doc (morning/evening cron + Windows Task Scheduler) | Todo |
+| AR5 | India locale: Hindi-English call script variant + INR `sample-shop-profile` example | Todo |
+| AR6 | Write app `README.md` (setup, side effects, env vars, cancellation) | Todo |
+| AR7 | CLI report formatter — pretty terminal output for weekly summary | Todo |
+| AR8 | Run `python3 scripts/validate_repository.py` before PR | Todo |
 
 ### Shared (pair on these)
 
 | # | Task | Owner | Partner |
 | --- | --- | --- | --- |
-| S1 | `example_request.json` + `sample-shop-profile.json` | Awwal | Rajput reviews |
-| S2 | Integration test: fixture result → SQLite → summary | Rajput | Awwal reviews |
-| S3 | Root `README.md` list entries for skill + app | Awwal | Rajput reviews |
-| S4 | Scheduler recipe doc (morning/evening cron) | Rajput | Awwal reviews |
+| S1 | `example_request.json` + `sample-shop-profile.json` | Awwal | Rajput + Aranwa review |
+| S2 | Integration test: fixture result → SQLite → summary | Rajput | Aranwa writes assertions |
+| S3 | Root `README.md` list entries for skill + app | Awwal | Aranwa reviews |
+| S4 | `assets/` demo fixtures (fictional call transcripts + results) | Aranwa | Awwal reviews |
 
 ---
 
@@ -399,24 +408,25 @@ python3 scripts/check_branch_name.py --branch feat/shop-voice-manager
 
 ### Day-by-day schedule (suggested)
 
-| Day | Awwal | Rajput |
-| --- | --- | --- |
-| **1** | CALL-E auth, finalize schemas (A8) | App scaffold + SQLite (R3, R4) |
-| **2** | Skill + call scripts (A6, A7) | SDK client preview mode (R5) |
-| **3** | First live inventory call test (A10) | Ingest structured results (R6) |
-| **4** | Evening sales call test (A10) | Summary generator (R7) |
-| **5** | Scheduler doc review (S4) | Tests + fixtures (R8) |
-| **6** | Demo video (A4) | README + validation (R9, R10) |
-| **7** | Devpost + upstream PR (A5, A9) | PR review fixes (R10) |
+| Day | Awwal | Rajput | Aranwa |
+| --- | --- | --- | --- |
+| **1** | CALL-E auth, schemas (A8) | App scaffold + SQLite (R3, R4) | Clone, dev setup (AR1) |
+| **2** | Skill + call scripts (A6, A7) | SDK preview mode (R5) | Demo fixtures (S4) |
+| **3** | Live inventory call test (A10) | Ingest results (R6) | Summary generator (AR2) |
+| **4** | Live sales call test (A10) | Pair on S2 integration test | Tests + fixtures (AR3) |
+| **5** | Review India scripts (AR5) | Fix ingest bugs from tests | Scheduler doc (AR4) |
+| **6** | Demo video (A4) | Polish client.py edge cases | README + CLI formatter (AR6, AR7) |
+| **7** | Devpost + upstream PR (A5, A9) | PR review fixes | Validation (AR8) |
 
-### Git setup for Rajput
+### Git setup for Rajput and Aranwa
 
 ```bash
 git clone https://github.com/Awwal41/awesome-phone-call-agents.git
 cd awesome-phone-call-agents
 git remote add upstream https://github.com/CALLE-AI/awesome-phone-call-agents.git
 git fetch upstream
-git checkout -b feat/shop-voice-manager
+git checkout feat/shop-voice-manager
+git pull origin feat/shop-voice-manager
 ```
 
 Work on `feat/shop-voice-manager`, push to `origin`, Awwal opens PR to `upstream/main`.
