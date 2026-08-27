@@ -6,7 +6,6 @@ Refs #18, #19.
 from __future__ import annotations
 
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -14,31 +13,12 @@ import pytest
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = APP_ROOT / "fixtures"
-sys.path.insert(0, str(APP_ROOT))
 
 import summarize  # noqa: E402
 from demo_ledger import CONFIDENCE_THRESHOLD, build  # noqa: E402
 
 WEEK_START, WEEK_END = "2026-08-10", "2026-08-16"
 SHOP = "demo-lagos-corner-shop"
-
-
-@pytest.fixture(scope="module")
-def ledger(tmp_path_factory):
-    path = build(tmp_path_factory.mktemp("ledger") / "shop.db")
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    yield conn
-    conn.close()
-
-
-@pytest.fixture(scope="module")
-def full_ledger(tmp_path_factory):
-    path = build(tmp_path_factory.mktemp("ledger_edge") / "shop.db", include_edge_cases=True)
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    yield conn
-    conn.close()
 
 
 def golden(name: str) -> dict:

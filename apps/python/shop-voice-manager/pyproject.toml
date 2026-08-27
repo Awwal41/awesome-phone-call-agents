@@ -1,0 +1,22 @@
+[project]
+name = "shop-voice-manager"
+version = "0.1.0"
+description = "Voice-first business record for informal retailers: CALL-E check-ins become a shop ledger and a weekly summary."
+requires-python = ">=3.11"
+
+# Empty on purpose. store.py, ingest.py, summarize.py and demo_ledger.py import
+# only the standard library, which is why the demo runs on a clean checkout with
+# nothing installed. `calle-ai` will be declared when the live call path lands
+# (R5) and not before — declaring an SDK this app does not yet call would
+# overstate what it depends on.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "jsonschema>=4.0",   # validate_fixtures falls back without it; pinned so CI is exact
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

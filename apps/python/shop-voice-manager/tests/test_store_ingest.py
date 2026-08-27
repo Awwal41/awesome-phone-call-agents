@@ -14,7 +14,6 @@ import pytest
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = APP_ROOT / "fixtures"
-sys.path.insert(0, str(APP_ROOT))
 
 import ingest  # noqa: E402
 import store  # noqa: E402
