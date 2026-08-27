@@ -2,7 +2,11 @@
   "sales_day_completed": true,
   "estimated_revenue": 85000,
   "currency": "NGN",
-  "top_sellers": ["Indomie", "Cooking oil", "Milo"],
+  "top_sellers": [
+    "Indomie",
+    "Rice",
+    "Sugar"
+  ],
   "procurement_spend": 120000,
   "procurement_items": [
     {

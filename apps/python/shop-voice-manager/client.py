@@ -59,17 +59,32 @@ def preview(request: dict) -> dict:
     }
 
 
-def demo_summary() -> str:
+def demo_summary(shop_id: str, method: str = "turnover") -> str:
+    """Compute the weekly summary from the fixture call results.
+
+    Nothing here is hardcoded. The fixtures are ingested into a real SQLite
+    ledger and summarize.py derives every figure from it, so the numbers change
+    if the fixtures change. `demo_ledger` stands in for store.py (#14) and
+    ingest (#16) until those land.
+    """
+    import sqlite3
+    import tempfile
+
+    import summarize
+    from demo_ledger import build
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = build(Path(tmp) / "demo.db")
+        conn = sqlite3.connect(f"file:{ledger}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            summary = summarize.build_summary(conn, shop_id, method=method)
+        finally:
+            conn.close()
+
     return (
-        "=== Voice Shop Manager — weekly demo summary ===\n"
-        "Shop: Ada Corner Shop (demo-lagos-corner-shop)\n"
-        "This week estimated sales: NGN 425,000\n"
-        "Restock spend: NGN 310,000\n"
-        "Estimated gross margin: NGN 115,000\n"
-        "Running low: Indomie, Sugar\n"
-        "Capital in slow-moving stock: ~NGN 85,000 (Milo — barely sold this week)\n"
-        "==============================================\n"
-        "Source: fixture data only — not a live retailer."
+        summarize.render_text(summary)
+        + "\n\nComputed from fixture call results — not a live retailer."
     )
 
 
@@ -110,7 +125,13 @@ def main() -> int:
     parser.add_argument(
         "--weekly-summary",
         action="store_true",
-        help="Print demo weekly business summary",
+        help="Compute and print the weekly business summary from the fixture ledger",
+    )
+    parser.add_argument(
+        "--slow-moving-method",
+        choices=("turnover", "top-sellers"),
+        default="turnover",
+        help="How slow-moving stock is identified (see fixtures/README.md)",
     )
     parser.add_argument(
         "--live",
@@ -133,7 +154,7 @@ def main() -> int:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     if args.weekly_summary:
         print()
-        print(demo_summary())
+        print(demo_summary(request["shop_id"], args.slow_moving_method))
     return 0
 
 
