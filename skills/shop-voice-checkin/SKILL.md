@@ -18,6 +18,8 @@ This skill is the voice layer of **Voice Shop Manager** — "your business manag
 
 Pair with the runnable app at `apps/python/shop-voice-manager/` (relative to this submission repository root) to persist results in SQLite and generate weekly summaries.
 
+**Demo mode:** Default hackathon path uses fixtures — no live call. See `references/demo-mode.md`.
+
 ## When not to use
 
 - Cold-calling retailers who did not consent
