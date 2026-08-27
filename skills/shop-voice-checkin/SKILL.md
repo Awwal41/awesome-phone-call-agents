@@ -113,7 +113,11 @@ Mask phone numbers in any user-facing summary.
 
 ## Scheduling recurring check-ins
 
-This skill places **one call per invocation**. For daily morning and evening check-ins, wrap it with [`call-reminder`](../call-reminder/) or a host cron / Task Scheduler job. The scheduler owns recurrence; CALL-E places one call per run.
+This skill places **one call per invocation**. The host scheduler owns recurrence; CALL-E places one call per run.
+
+See [`references/scheduling.md`](./references/scheduling.md) for the cron and Windows Task Scheduler recipes, how to update a schedule without doubling the calls, and how to cancel. Generate entries with `scripts/render_schedule.py` rather than writing them by hand.
+
+For general scheduler-wrapper guidance across other hosts, see [`call-reminder`](../call-reminder/).
 
 ## Related project docs
 

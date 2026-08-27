@@ -42,7 +42,7 @@ Do not place a duplicate live call for the same shop, call type, and calendar da
 ## Cancellation
 
 - Before execution: use preview mode; omit live flags.
-- For recurring check-ins scheduled via a host cron or Task Scheduler: deleting or disabling that job stops future calls.
+- For recurring check-ins scheduled via a host cron or Task Scheduler: deleting or disabling that job stops future calls. Clearing `recipient_consented` alone does **not** — the scheduler never reads it. See [`scheduling.md`](./scheduling.md#cancellation).
 - After CALL-E accepts a task, use dashboard controls if cancel is available before the dial completes.
 
 ## Platform coverage
