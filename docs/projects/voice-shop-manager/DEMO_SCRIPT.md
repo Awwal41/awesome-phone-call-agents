@@ -1,4 +1,9 @@
-# Demo video script (~3 minutes)
+# Demo video script (2:55 — hard limit 3:00)
+
+> **Timing is a submission rule, not a guideline.** The rules require under
+> 3 minutes. This script is cut to **2:55**, leaving 5 seconds of margin.
+> If a segment runs long while recording, cut from the closing line — never
+> from the live call clip, which is the most persuasive 60 seconds in the film.
 
 **Title:** Voice Shop Manager — Your business manager, on the phone  
 **Audience:** Hackathon judges + Devpost  
@@ -6,7 +11,7 @@
 
 ---
 
-## 0:00–0:30 — Problem
+## 0:00–0:25 — Problem
 
 **Visual:** Simple slide or talking head + market photo
 
@@ -16,7 +21,7 @@
 
 ---
 
-## 0:30–1:00 — Solution
+## 0:25–0:50 — Solution
 
 **Visual:** Architecture diagram from PROJECT_PLAN.md
 
@@ -26,7 +31,7 @@
 
 ---
 
-## 1:00–1:45 — Preview mode (no call placed)
+## 0:50–1:35 — Preview mode (no call placed)
 
 **Visual:** Terminal screen recording
 
@@ -41,7 +46,7 @@ python client.py --request example_request.json
 
 ---
 
-## 1:45–2:45 — Live call clip (one real call)
+## 1:35–2:35 — Live call clip (one real call) — do not cut
 
 **Visual:** Waveform or call status UI + short transcript excerpt (with owner consent)
 
@@ -55,18 +60,24 @@ python client.py --request example_request.json
 
 ---
 
-## 2:45–3:15 — Weekly summary + vision
+## 2:35–2:55 — Weekly summary + close
 
-**Visual:** Terminal output from `summarize.py`
+**Visual:** Terminal output from `summarize.py` (verbatim from the demo run)
 
 ```text
 This week you sold about ₦425,000. You spent about ₦310,000 restocking.
 Products running low: Indomie, Sugar.
+Approximate capital in slow-moving stock: ₦45,000.
 ```
 
-> "Over a week, the system shows sales, restock spend, and capital tied in slow-moving stock. Next: procurement optimization, multi-language support, and India rollout."
+> "A week of calls, and the shop owner can see sales, restock spend, and the
+> ₦45,000 sitting in stock that isn't moving — from conversations, not data
+> entry. Inventory, sales, procurement, finance, advice. Nigeria today, India
+> next."
 
-**On screen:** Five agents — Inventory · Sales · Procurement · Finance · Advisor
+**On screen:** End card with the three links below.
+
+_One take, one breath — this is the 20 seconds most likely to overrun._
 
 ---
 
@@ -75,7 +86,7 @@ Products running low: Indomie, Sugar.
 - [ ] Public YouTube or Vimeo link
 - [ ] Mask real phone numbers
 - [ ] Show CALL-E + awesome-phone-call-agents PR link at end
-- [ ] Under 3:30 total length
+- [ ] **Under 3:00 total length** — check the export, not the script
 - [ ] Consent obtained from anyone heard on the live call clip
 
 ## Links to show in end card

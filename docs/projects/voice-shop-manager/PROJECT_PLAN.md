@@ -16,7 +16,12 @@
 
 ## Progress snapshot
 
-_Last updated: 2026-08-26 on branch `feat/shop-voice-manager`_
+_Last updated: 2026-09-01 on branch `feat/shop-voice-manager` (20 commits ahead of
+`main`, 10 not yet pushed)_
+
+Whole repository is green: `./check.sh` runs repository validation, fixture
+validation (14 call fixtures + 5 edge cases) and **42 tests** with no
+credentials, no network, and no calls.
 
 ### Overall
 
@@ -24,9 +29,9 @@ _Last updated: 2026-08-26 on branch `feat/shop-voice-manager`_
 | --- | ---: | ---: | --- |
 | Awwal tasks (demo scope) | **10 / 10** | 0 | Awwal |
 | Agent skill | Complete | — | Awwal |
-| Python app (demo runner) | Demo scaffold | SDK + SQLite (R3–R6) | Rajput |
-| Insights, tests, docs | Demo fixtures | Full suite (AR2–AR8) | Aranwa |
-| Shared (S1, S3, S4 demo) | 3 partial | S2 integration test | All |
+| Python app | Ledger + ingest (R4, R6), wired end to end | Live SDK path (R5) | Rajput |
+| Insights, tests, docs | **7 / 8** (AR2–AR4, AR6–AR8) | India locale (AR5) | Aranwa |
+| Shared (S1–S4) | **4 / 4** | — | All |
 
 ### Awwal — all tasks complete (demo mode)
 
@@ -60,12 +65,132 @@ python client.py --request example_request.json --weekly-summary
 - [x] Root `README.md` awesome-list entries for skill + app
 - [x] Repository validation passes
 
-### Still open (Rajput + Aranwa — post-demo)
+### Landed since the last sync (2026-08-26 → 2026-09-01)
 
-- [ ] CALL-E Python SDK live path + SQLite store (Rajput [#13](https://github.com/Awwal41/awesome-phone-call-agents/issues/13)–[#16](https://github.com/Awwal41/awesome-phone-call-agents/issues/16))
-- [ ] `summarize.py`, pytest, scheduler doc, India locale (Aranwa [#17](https://github.com/Awwal41/awesome-phone-call-agents/issues/17)–[#24](https://github.com/Awwal41/awesome-phone-call-agents/issues/24))
-- [ ] Integration test S2 ([#26](https://github.com/Awwal41/awesome-phone-call-agents/issues/26))
-- [ ] Optional: record video + submit Devpost + open upstream PR (manual, guided by A4/A5/A9 docs)
+| Commit | Task | What landed |
+| --- | --- | --- |
+| `ef6f537`, `2636b0d` | R4, R6 | `SCHEMA.md` ledger contract, `store.py`, confidence-gated `ingest.py` |
+| `e496ee5` | S4 | A full week of call fixtures, 5 edge cases, `validate_fixtures.py` |
+| `d4f865c`, `dd654eb` | AR2 | `summarize.py` weekly insights, two dead-stock methods, `--format text\|json` (AR7) |
+| `330cb8d`, `29a8c89` | AR3, S2 | 42 tests incl. fixture → SQLite → summary golden test; pytest as sole entry point |
+| `a5be79c` | AR4 | `references/scheduling.md` + `render_schedule.py`, cancellation first-class |
+| `7ddc626` | AR8 | `check.sh` + pre-push hook — validation now runs automatically |
+
+### Still open
+
+Ordered by value. The first item is small and unblocks an honest demo.
+
+- [x] ~~Rewire `client.py` onto the real pipeline.~~ **Not needed — it already
+      is.** `demo_ledger.build` was rewritten in `2636b0d` to run every fixture
+      through `ingest.ingest_call` into a `store.py` ledger; only the *input* is
+      a fixture rather than a CALL-E result. A stale docstring in `client.py`
+      claimed otherwise and has been corrected. (refs [#13](https://github.com/Awwal41/awesome-phone-call-agents/issues/13))
+- [ ] **R5 — live CALL-E SDK path** ([#15](https://github.com/Awwal41/awesome-phone-call-agents/issues/15)). `--live` still prints a refusal and exits 1.
+      Note the flag drift: `safety.md` specifies `--execute --confirm-recipient-opt-in`,
+      the code has `--live`. Settle on the documented spelling.
+- [ ] **AR5 — India locale** ([#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21)). Not started. Only NG/NGN profiles exist. Mostly
+      content, not code — `summarize.py` already follows the shop's currency.
+- [x] ~~**Doc refresh.**~~ Done — app `README.md` now says 42 tests, documents
+      `store.py` and `ingest.py`, and points at `./check.sh`.
+- [ ] **Push the 10 local commits**, then the manual steps: record video (A4),
+      open upstream PR (A9), submit Devpost (A5).
+
+> **Before the upstream PR:** decide whether `docs/projects/voice-shop-manager/`
+> ships with it. This plan, `issue-map.json`, and `DEVPOST_CHECKLIST.md` are team
+> coordination pointing at a personal fork's issue tracker — useful to us, likely
+> noise to `CALLE-AI/awesome-phone-call-agents`. Nothing in the skill or the app
+> depends on them except README links, which would need adjusting if they are
+> dropped.
+
+---
+
+## R5 — live CALL-E SDK path: implementation notes
+
+_Written 2026-09-01 against the interfaces as they actually exist on the branch._
+
+**The seam already exists.** `demo_ledger.build()` runs fixtures through
+`ingest.ingest_call` into a `store.py` ledger. R5 does not touch that path — it
+only supplies a *CALL-E result* where `demo_ledger` supplies a *fixture*.
+Everything downstream (confidence gate, receipts, summary, golden files) is
+already tested and must not change.
+
+```text
+        demo_ledger.py ─┐
+                        ├─→ ingest.ingest_call() ─→ store.py ─→ summarize.py
+   R5: live_call.py ────┘        (unchanged, 42 tests green)
+```
+
+### Step 1 — copy the reference runtime, do not reinvent it
+
+`apps/python/metapelet-checkin/` is the repo's preview-default reference and
+already solves the hard parts. Read `call_runtime.py` before writing anything:
+
+- `normalize_trusted_base_url()` — https-only, allowlisted to
+  `https://api.heycall-e.com`, rejects credentials/query/path.
+- `execute_live()` — crash-safe checkpointing under `.call-state/`, so a crash
+  mid-call cannot silently place a second one.
+- `provider_account_hash()` — 24-char SHA-256 of the key, for scoping
+  checkpoints without storing the key.
+
+Dependency: `calle-ai>=0.1.0`. Import is `from calle import CalleClient`.
+
+### Step 2 — the call itself
+
+```python
+client = CalleClient(api_key=os.environ["CALLE_API_KEY"], base_url=resolve_base_url())
+created = client.calls.create(
+    task=build_task(request),          # already in client.py — reuse it
+    recipients=[{"phones": [request["phone"]],
+                 "region": request["region"], "locale": request["locale"]}],
+    result_schema=load_json(schema_path(request["call_type"])),
+    idempotency_key=f"shopvoice-{shop_id}-{call_type}-{date}",
+)
+```
+
+`build_task()`, `preview()` and `schema_path()` in `client.py` are already
+correct and shared with the demo path. Do not fork them.
+
+**Idempotency key:** the plan specifies `shopvoice-{shop_id}-{type}-{date}`.
+`client.py` currently emits `…-DEMO` in preview. Use the real date on the live
+path so a retry cannot double-call.
+
+### Step 3 — fix the flag drift
+
+`references/safety.md` specifies `--execute --confirm-recipient-opt-in`.
+`client.py` has `--live`. **The docs are the contract — change the code.**
+Follow `metapelet-checkin/client.py`: `--execute` alone previews and refuses;
+it requires `--confirm-recipient-opt-in` to proceed. Keep `--live` as a
+deprecated alias that errors with the new spelling if you want a soft landing.
+
+### Step 4 — hand the result to the existing gate
+
+Map the CALL-E response into the shape `ingest.ingest_call` already accepts
+(the fixtures under `fixtures/calls/` are the specification), then call it. A
+live call that comes back low-confidence must be rejected exactly as
+`fixtures/edge-cases/low-confidence.json` is — the gate is `confidence >= 0.60`
+in `ingest._decide()`. Every call, rejected or not, must leave a receipt via
+`store.record_receipt`.
+
+### Step 5 — tests that still place no calls
+
+`tests/test_no_live_calls.py` asserts no test file can place a call; it must
+stay green. Test R5 with a stubbed client object, never the real SDK:
+
+- create → success → rows land
+- create → low confidence → receipt only, no rows
+- create → crash after create → checkpoint replay does **not** create a second call
+- `--execute` without `--confirm-recipient-opt-in` → exits non-zero, no client built
+- missing `CALLE_API_KEY` → clean error, no client built
+
+### Step 6 — the one live call
+
+Per `CLAUDE.md`, **Aranwa runs this personally.** Budget is 20 calls total and
+the demo video depends on it. Do a full dry run first, then one call:
+
+```bash
+python client.py --request my-live-request.json \
+    --execute --confirm-recipient-opt-in
+```
 
 ---
 
@@ -488,30 +613,30 @@ Rajput and Aranwa: ask Awwal to add you as a **collaborator** on `Awwal41/awesom
 | --- | --- | --- | --- |
 | R1 | [#11](https://github.com/Awwal41/awesome-phone-call-agents/issues/11) | Clone fork, read this plan, confirm schema + data model | Todo |
 | R2 | [#12](https://github.com/Awwal41/awesome-phone-call-agents/issues/12) | Branch `feat/shop-voice-manager` | Done |
-| R3 | [#13](https://github.com/Awwal41/awesome-phone-call-agents/issues/13) | Extend demo app — SDK + SQLite | Todo (demo scaffold exists) |
-| R4 | [#14](https://github.com/Awwal41/awesome-phone-call-agents/issues/14) | Implement SQLite `store.py` + schema migrations | Todo |
-| R5 | [#15](https://github.com/Awwal41/awesome-phone-call-agents/issues/15) | Wire CALL-E Python SDK — preview default, live opt-in | Todo |
-| R6 | [#16](https://github.com/Awwal41/awesome-phone-call-agents/issues/16) | Ingest structured call results into SQLite | Todo |
+| R3 | [#13](https://github.com/Awwal41/awesome-phone-call-agents/issues/13) | Extend demo app — SDK + SQLite | SQLite side **done** and wired; SDK side is R5 |
+| R4 | [#14](https://github.com/Awwal41/awesome-phone-call-agents/issues/14) | Implement SQLite `store.py` + schema migrations | **Done** — `store.py`, `SCHEMA.md`, refuses incompatible schema |
+| R5 | [#15](https://github.com/Awwal41/awesome-phone-call-agents/issues/15) | Wire CALL-E Python SDK — preview default, live opt-in | Todo — the one remaining feature gap |
+| R6 | [#16](https://github.com/Awwal41/awesome-phone-call-agents/issues/16) | Ingest structured call results into SQLite | **Done** — `ingest.py`, confidence-gated, idempotent |
 
 ### Aranwa
 
 | # | Issue | Task | Status |
 | --- | --- | --- | --- |
-| AR1 | [#17](https://github.com/Awwal41/awesome-phone-call-agents/issues/17) | Clone fork, read this plan, set up local dev environment | Todo |
-| AR2 | [#18](https://github.com/Awwal41/awesome-phone-call-agents/issues/18) | Implement `summarize.py` weekly insights | Todo |
-| AR3 | [#19](https://github.com/Awwal41/awesome-phone-call-agents/issues/19) | Add pytest + fixtures (no live calls in CI) | Todo |
-| AR4 | [#20](https://github.com/Awwal41/awesome-phone-call-agents/issues/20) | Scheduler recipe doc (morning/evening cron + Windows Task Scheduler) | Todo |
-| AR5 | [#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21) | India locale: Hindi-English scripts + INR shop profile | Todo |
-| AR6 | [#22](https://github.com/Awwal41/awesome-phone-call-agents/issues/22) | Extend app README (demo README exists) | Todo |
-| AR7 | [#23](https://github.com/Awwal41/awesome-phone-call-agents/issues/23) | CLI report formatter — pretty terminal output | Todo |
-| AR8 | [#24](https://github.com/Awwal41/awesome-phone-call-agents/issues/24) | Run `python3 scripts/validate_repository.py` before PR | Todo |
+| AR1 | [#17](https://github.com/Awwal41/awesome-phone-call-agents/issues/17) | Clone fork, read this plan, set up local dev environment | **Done** — `.venv` + `requirements-dev.txt` |
+| AR2 | [#18](https://github.com/Awwal41/awesome-phone-call-agents/issues/18) | Implement `summarize.py` weekly insights | **Done** — computed from the ledger, two dead-stock methods |
+| AR3 | [#19](https://github.com/Awwal41/awesome-phone-call-agents/issues/19) | Add pytest + fixtures (no live calls in CI) | **Done** — 42 tests, incl. a test that asserts no test can place a call |
+| AR4 | [#20](https://github.com/Awwal41/awesome-phone-call-agents/issues/20) | Scheduler recipe doc (morning/evening cron + Windows Task Scheduler) | **Done** — `references/scheduling.md` + `render_schedule.py` |
+| AR5 | [#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21) | India locale: Hindi-English scripts + INR shop profile | Todo — only NG/NGN profiles exist |
+| AR6 | [#22](https://github.com/Awwal41/awesome-phone-call-agents/issues/22) | Extend app README (demo README exists) | **Done** — needs a refresh (stale test count, stale stand-in note) |
+| AR7 | [#23](https://github.com/Awwal41/awesome-phone-call-agents/issues/23) | CLI report formatter — pretty terminal output | **Done** — `--format text\|json` in `summarize.py` |
+| AR8 | [#24](https://github.com/Awwal41/awesome-phone-call-agents/issues/24) | Run `python3 scripts/validate_repository.py` before PR | **Done** — automated in `check.sh` + pre-push hook |
 
 ### Shared (pair on these)
 
 | # | Issue | Task | Owner | Partner |
 | --- | --- | --- | --- | --- |
 | S1 | [#25](https://github.com/Awwal41/awesome-phone-call-agents/issues/25) | `example_request.json` in app | Done (demo) |
-| S2 | [#26](https://github.com/Awwal41/awesome-phone-call-agents/issues/26) | Integration test: fixture → SQLite → summary | Rajput | Aranwa |
+| S2 | [#26](https://github.com/Awwal41/awesome-phone-call-agents/issues/26) | Integration test: fixture → SQLite → summary | **Done** — `test_ingest_then_summarize_matches_the_golden_file` |
 | S3 | [#27](https://github.com/Awwal41/awesome-phone-call-agents/issues/27) | Root `README.md` list entries | Done (demo) |
 | S4 | [#28](https://github.com/Awwal41/awesome-phone-call-agents/issues/28) | Demo fixtures (Awwal demo set; Aranwa may extend) | Done (demo) |
 
@@ -617,7 +742,7 @@ Same architecture applies:
 
 - [x] Skill passes `scripts/validate_repository.py`
 - [x] App has preview default + documented live opt-in (demo: `--live` refused; Rajput adds SDK)
-- [ ] Tests run without CALL-E credentials (Aranwa AR3)
+- [x] Tests run without CALL-E credentials (Aranwa AR3) — 42 tests, no network
 - [x] No secrets or real phone numbers in git
 - [x] README entries in root awesome list ([#27](https://github.com/Awwal41/awesome-phone-call-agents/issues/27))
 - [x] Safety + consent documented
