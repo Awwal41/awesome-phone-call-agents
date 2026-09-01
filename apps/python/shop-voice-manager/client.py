@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Voice Shop Manager — demo runner (preview + fixtures, no live call by default)."""
+"""Voice Shop Manager — runner. Preview by default; live calls are opt-in.
+
+Default and `--fixture` paths place no call and need no credentials. A real
+call requires BOTH `--execute` and `--confirm-recipient-opt-in`, as specified
+in skills/shop-voice-checkin/references/safety.md.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -62,10 +69,11 @@ def preview(request: dict) -> dict:
 def demo_summary(shop_id: str, method: str = "turnover") -> str:
     """Compute the weekly summary from the fixture call results.
 
-    Nothing here is hardcoded. The fixtures are ingested into a real SQLite
-    ledger and summarize.py derives every figure from it, so the numbers change
-    if the fixtures change. `demo_ledger` stands in for store.py (#14) and
-    ingest (#16) until those land.
+    Nothing here is hardcoded. `demo_ledger.build` runs the fixtures through
+    the production path — `ingest.ingest_call` into a real SQLite ledger built
+    by `store.py` — and summarize.py derives every figure from it. Only the
+    *input* is a fixture instead of a CALL-E result, so the numbers change if
+    the fixtures change and the demo cannot drift from live behaviour.
     """
     import sqlite3
     import tempfile
@@ -106,6 +114,67 @@ def run_demo(request: dict, fixture_name: str | None) -> dict:
     }
 
 
+def run_live(args) -> int:
+    """Place one real call, then ingest it through the same path as the demo."""
+    import live_call
+
+    request = load_json(args.request)
+
+    if not args.confirm_recipient_opt_in:
+        print(
+            "Live calls require --confirm-recipient-opt-in.\n"
+            "Confirm the shop owner has opted in, then re-run with both flags.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if not request.get("recipient_consented"):
+        print(
+            f"{args.request}: recipient_consented is not true. "
+            "Do not place a call the owner has not agreed to.",
+            file=sys.stderr,
+        )
+        return 2
+
+    api_key = os.environ.get("CALLE_API_KEY")
+    if not api_key:
+        print("CALLE_API_KEY is not set. Export it, then re-run.", file=sys.stderr)
+        return 2
+
+    call_date = args.call_date or date.today().isoformat()
+
+    try:
+        base_url = live_call.resolve_base_url()
+        client = live_call.build_client(api_key, base_url)
+        result = live_call.execute_live(
+            request,
+            client,
+            task=build_task(request),
+            schema=load_json(schema_path(request["call_type"])),
+            provider_hash=live_call.provider_account_hash(api_key),
+            call_date=call_date,
+        )
+    except live_call.LiveCallError as exc:
+        print(f"Live call failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    if args.db:
+        import ingest
+        import store
+
+        conn = store.connect(args.db)
+        store.initialize(conn)
+        try:
+            verdict = ingest.ingest_call(conn, result)
+        finally:
+            conn.close()
+        print(f"\nLedger: {verdict}", file=sys.stderr)
+
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Voice Shop Manager demo (default: no live call)"
@@ -134,20 +203,43 @@ def main() -> int:
         help="How slow-moving stock is identified (see fixtures/README.md)",
     )
     parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Place a REAL CALL-E call. Requires --confirm-recipient-opt-in.",
+    )
+    parser.add_argument(
+        "--confirm-recipient-opt-in",
+        action="store_true",
+        help="Required with --execute: the recipient has consented to be called.",
+    )
+    parser.add_argument(
+        "--call-date",
+        default=None,
+        help="Ledger date for the call (default: today). Also fixes the idempotency key.",
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="With --execute: ingest the result into this SQLite ledger.",
+    )
+    parser.add_argument(
         "--live",
         action="store_true",
-        help="[Not implemented in demo] Place real CALL-E call — use Rajput's SDK path",
+        help=argparse.SUPPRESS,  # deprecated alias, kept so old commands fail loudly
     )
     args = parser.parse_args()
 
     if args.live:
         print(
-            "Live calls are not enabled in this demo build.\n"
-            "Set CALLE_API_KEY and use the full SDK client (R5) when ready.\n"
-            "For hackathon demo, run without --live.",
+            "--live has been renamed. Use the spelling the safety docs specify:\n"
+            "  --execute --confirm-recipient-opt-in",
             file=sys.stderr,
         )
-        return 1
+        return 2
+
+    if args.execute:
+        return run_live(args)
 
     request = load_json(args.request)
     payload = run_demo(request, args.fixture)
