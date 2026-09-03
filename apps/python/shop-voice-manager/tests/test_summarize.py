@@ -189,3 +189,79 @@ def test_cli_emits_valid_json(ledger, tmp_path, capsys):
 def test_cli_rejects_a_missing_ledger(capsys):
     assert summarize.main(["--db", "/nonexistent/shop.db", "--shop-id", SHOP]) == 1
     assert "No ledger" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# HTML output — the demo artifact a judge can double-click
+# --------------------------------------------------------------------------
+
+def test_html_is_a_complete_standalone_document(ledger):
+    doc = summarize.render_html(summarize.build_summary(ledger, SHOP))
+    assert doc.startswith("<!doctype html>")
+    assert doc.rstrip().endswith("</html>")
+    assert "<style>" in doc, "CSS must be inlined, not linked"
+
+
+def test_html_fetches_nothing_from_the_network(ledger):
+    """It has to work double-clicked, offline, with no server and no build step."""
+    doc = summarize.render_html(summarize.build_summary(ledger, SHOP))
+    for scheme in ("http://", "https://", "//cdn", "src="):
+        assert scheme not in doc, f"{scheme!r} would make the file depend on a network"
+
+
+def test_html_carries_the_headline_figures(ledger):
+    summary = summarize.build_summary(ledger, SHOP)
+    doc = summarize.render_html(summary)
+    assert "425,000" in doc
+    assert "310,000" in doc
+    assert "115,000" in doc
+    assert summary["narrative"] in doc or "sold about" in doc
+
+
+def test_html_escapes_values_from_the_ledger(ledger):
+    """Product and shop names come from a call transcript, so they are untrusted."""
+    summary = summarize.build_summary(ledger, SHOP)
+    summary["display_name"] = '<script>alert(1)</script>'
+    summary["products_running_low"] = ['Rice & "Beans"']
+    doc = summarize.render_html(summary)
+    assert "<script>alert(1)</script>" not in doc
+    assert "&lt;script&gt;" in doc
+    assert "&amp;" in doc
+
+
+def test_html_is_deterministic(ledger):
+    """No timestamps — the same ledger must render byte-identically."""
+    a = summarize.render_html(summarize.build_summary(ledger, SHOP))
+    b = summarize.render_html(summarize.build_summary(ledger, SHOP))
+    assert a == b
+
+
+def test_html_tags_are_balanced(ledger):
+    from html.parser import HTMLParser
+
+    void = {"meta", "br", "img", "hr", "input", "link"}
+    stack: list[str] = []
+    problems: list[str] = []
+
+    class Check(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag not in void:
+                stack.append(tag)
+
+        def handle_endtag(self, tag):
+            if stack and stack[-1] == tag:
+                stack.pop()
+            else:
+                problems.append(tag)
+
+    Check().feed(summarize.render_html(summarize.build_summary(ledger, SHOP)))
+    assert not problems, f"mismatched close tags: {problems}"
+    assert not stack, f"unclosed tags: {stack}"
+
+
+def test_cli_emits_html(tmp_path, capsys):
+    path = build(tmp_path / "cli-html.db")
+    assert summarize.main(["--db", str(path), "--shop-id", SHOP, "--format", "html"]) == 0
+    out = capsys.readouterr().out
+    assert out.lstrip().startswith("<!doctype html>")
+    assert "425,000" in out

@@ -12,6 +12,7 @@ Refs #18. Ledger shape is documented in SCHEMA.md.
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import sqlite3
 import sys
@@ -316,13 +317,161 @@ def render_text(summary: dict) -> str:
     return "\n".join(out)
 
 
+# --------------------------------------------------------------------------
+# HTML rendering
+#
+# One self-contained file: no network, no fonts to fetch, no build step, no
+# framework. A judge double-clicks it and sees the shop's week, which is a
+# stronger answer to "judges must have access to a working project" than a
+# server they have to start. Output is deterministic — no timestamps — so the
+# golden-file tests can pin it.
+# --------------------------------------------------------------------------
+
+HTML_STYLE = """
+:root{--bg:#f5f6f4;--card:#fff;--ink:#15191a;--soft:#4a5250;--faint:#7b8481;
+--rule:#d9ddd8;--accent:#0d5c63;--good:#2f6b3f;--warn:#8a5a00;--low:#9b2f2c}
+@media(prefers-color-scheme:dark){:root{--bg:#111516;--card:#181d1e;--ink:#e7ebe9;
+--soft:#a6b0ad;--faint:#77827f;--rule:#2b3234;--accent:#5cb8bf;--good:#6fbe84;
+--warn:#d9a648;--low:#e08b86}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,
+"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:52rem;margin:0 auto;padding:2.5rem 1.25rem 4rem;
+display:flex;flex-direction:column;gap:2rem}
+.eyebrow{font-size:.7rem;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);
+font-weight:600;margin:0 0 .5rem}
+h1{font-size:clamp(1.6rem,4vw,2.2rem);line-height:1.15;margin:0;letter-spacing:-.02em}
+.dates{color:var(--faint);margin:.35rem 0 0;font-variant-numeric:tabular-nums}
+.narrative{background:var(--card);border-left:3px solid var(--accent);padding:1.25rem 1.4rem;
+font-size:1.12rem;line-height:1.55;white-space:pre-line;border-radius:0 3px 3px 0}
+.figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));gap:1px;
+background:var(--rule);border:1px solid var(--rule)}
+.fig{background:var(--card);padding:1rem 1.1rem}
+.fig .k{font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);
+margin:0 0 .35rem}
+.fig .v{font-size:1.5rem;font-weight:600;margin:0;font-variant-numeric:tabular-nums;
+letter-spacing:-.02em}
+.fig.gross .v{color:var(--good)}
+.bars{display:flex;flex-direction:column;gap:.6rem;background:var(--card);
+border:1px solid var(--rule);padding:1.15rem 1.25rem}
+.bar{display:grid;grid-template-columns:5.5rem 1fr auto;gap:.75rem;align-items:center;
+font-size:.85rem}
+.bar .lbl{color:var(--soft)}
+.bar .track{background:var(--rule);height:.6rem;border-radius:1px;overflow:hidden}
+.bar .fill{height:100%;background:var(--accent)}
+.bar.spend .fill{background:var(--warn)}
+.bar .amt{font-variant-numeric:tabular-nums;font-weight:500}
+h2{font-size:.72rem;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);
+margin:0 0 .75rem;font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:.4rem;padding:0;margin:0;list-style:none}
+.chips li{border:1px solid var(--low);color:var(--low);padding:.15rem .6rem;
+font-size:.85rem;border-radius:2px}
+table{width:100%;border-collapse:collapse;font-size:.9rem}
+th{text-align:left;font-size:.66rem;letter-spacing:.11em;text-transform:uppercase;
+color:var(--faint);padding:0 .8rem .5rem 0;border-bottom:1px solid var(--ink)}
+td{padding:.6rem .8rem .6rem 0;border-bottom:1px solid var(--rule)}
+th:last-child,td:last-child{padding-right:0;text-align:right}
+td.n{font-variant-numeric:tabular-nums}
+.scroll{overflow-x:auto}
+.meta{display:flex;flex-wrap:wrap;gap:1.5rem;color:var(--faint);font-size:.85rem;
+border-top:1px solid var(--rule);padding-top:1.25rem}
+.meta b{color:var(--soft);font-variant-numeric:tabular-nums}
+footer{color:var(--faint);font-size:.8rem;border-top:1px solid var(--rule);padding-top:1rem}
+"""
+
+
+def _bar(label: str, amount: float, peak: float, currency: str, cls: str = "") -> str:
+    pct = (amount / peak * 100) if peak else 0
+    return (
+        f'<div class="bar {cls}"><span class="lbl">{html.escape(label)}</span>'
+        f'<span class="track"><span class="fill" style="width:{pct:.1f}%"></span></span>'
+        f'<span class="amt">{html.escape(money(amount, currency))}</span></div>'
+    )
+
+
+def render_html(summary: dict) -> str:
+    """Render one week as a standalone HTML document."""
+    e = html.escape
+    currency = summary["currency"]
+    name = summary.get("display_name") or summary["shop_id"]
+
+    revenue = summary["estimated_revenue"]
+    spend = summary["procurement_spend"]
+    peak = max(revenue, spend, 1)
+
+    parts = [
+        "<!doctype html>",
+        '<html lang="en"><head><meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width,initial-scale=1">',
+        f"<title>{e(name)} — week of {e(summary['week_start'])}</title>",
+        f"<style>{HTML_STYLE}</style>",
+        "</head><body><div class=\"wrap\">",
+        "<header>",
+        '<p class="eyebrow">Voice Shop Manager · weekly summary</p>',
+        f"<h1>{e(str(name))}</h1>",
+        f'<p class="dates">{e(summary["week_start"])} to {e(summary["week_end"])}</p>',
+        "</header>",
+        f'<div class="narrative">{e(summary["narrative"])}</div>',
+        '<div class="figs">',
+        f'<div class="fig"><p class="k">Sales</p><p class="v">{e(money(revenue, currency))}</p></div>',
+        f'<div class="fig"><p class="k">Restocking</p><p class="v">{e(money(spend, currency))}</p></div>',
+        f'<div class="fig gross"><p class="k">Rough gross</p><p class="v">{e(money(summary["estimated_gross"], currency))}</p></div>',
+        "</div>",
+        '<div class="bars">',
+        _bar("Sold", revenue, peak, currency),
+        _bar("Restocked", spend, peak, currency, "spend"),
+        "</div>",
+    ]
+
+    low = summary["products_running_low"]
+    if low:
+        chips = "".join(f"<li>{e(str(p))}</li>" for p in low)
+        parts.append(f'<section><h2>Running low</h2><ul class="chips">{chips}</ul></section>')
+
+    slow = summary["slow_moving_products"]
+    if slow:
+        rows = []
+        for item in slow:
+            unit = f" {item['unit']}" if item.get("unit") else ""
+            held = f"{item['quantity_estimate']:g}{unit}"
+            turn = (f"{item['turnover'] * 100:.0f}%"
+                    if item.get("turnover") is not None else "unknown")
+            rows.append(
+                f"<tr><td>{e(str(item['name']))}</td><td class=\"n\">{e(held)}</td>"
+                f"<td class=\"n\">{e(turn)}</td>"
+                f"<td class=\"n\">{e(money(item['capital_estimate'], currency))}</td></tr>"
+            )
+        parts.append(
+            f'<section><h2>Capital in slow-moving stock '
+            f"({e(summary['slow_moving_method'])} method)</h2>"
+            '<div class="scroll"><table><thead><tr><th>Product</th><th>Held</th>'
+            "<th>Turnover</th><th>Capital</th></tr></thead><tbody>"
+            + "".join(rows) + "</tbody></table></div></section>"
+        )
+
+    if summary.get("capital_unknown_for"):
+        unknown = ", ".join(str(x) for x in summary["capital_unknown_for"])
+        parts.append(f"<p><small>No cost on record for: {e(unknown)}</small></p>")
+
+    parts += [
+        '<div class="meta">',
+        f'<span>Days with data <b>{summary["days_with_data"]}</b></span>',
+        f'<span>Calls completed <b>{summary["calls_completed"]} of {summary["calls_placed"]}</b></span>',
+        "</div>",
+        "<footer>Every figure computed from the shop's own call ledger. "
+        "No data entry — the owner only talked.</footer>",
+        "</div></body></html>",
+    ]
+    return "\n".join(parts)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Weekly shop summary from the local ledger")
     parser.add_argument("--db", type=Path, required=True, help="Path to the SQLite ledger")
     parser.add_argument("--shop-id", required=True)
     parser.add_argument("--week-start", help="YYYY-MM-DD, defaults to six days before the last recorded day")
     parser.add_argument("--week-end", help="YYYY-MM-DD, defaults to the last recorded day")
-    parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument("--format", choices=("text", "json", "html"), default="text")
     parser.add_argument(
         "--slow-moving-method",
         choices=("turnover", "top-sellers"),
@@ -354,6 +503,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.format == "json":
         print(json.dumps(summary, ensure_ascii=False, indent=2))
+    elif args.format == "html":
+        print(render_html(summary))
     else:
         print(render_text(summary))
     return 0
