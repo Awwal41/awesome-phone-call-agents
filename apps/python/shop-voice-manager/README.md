@@ -76,9 +76,31 @@ only, so it adds no dependency and `dependencies = []` still holds.
 
 ```bash
 cd ~/Documents/Aranwaolu/Awwal/work/apps/python/shop-voice-manager
-export CALLE_API_KEY=...      # only if you want it to dial
+
+# browsing only: the server itself is standard library, so any python works
 python3 web/server.py         # http://127.0.0.1:8765
+
+# to place calls: use the interpreter that has the CALL-E SDK, or the call
+# fails at dial time with "The CALL-E SDK is not installed"
+export CALLE_API_KEY=...
+venv/bin/python web/server.py
 ```
+
+The console serves history and forms from the standard library alone, but
+placing a call imports `calle`. Start it with the interpreter that has the SDK
+and both paths work.
+
+While iterating, add `SHOPVOICE_RELOAD=1` and the server restarts itself when a
+source file changes:
+
+```bash
+SHOPVOICE_RELOAD=1 venv/bin/python web/server.py
+```
+
+Static files are read per request, so HTML, CSS and JS were always live. The
+lists it reads from the environment were not, which is what the reload fixes.
+It never restarts while a call is in flight, because run status lives in memory
+and losing it would leave you blind to a call that is still ringing.
 
 Without a key it starts read only and says so in a banner, so you can browse
 history without any risk of dialling. `SHOPVOICE_DEMO=1` replays a stored call
