@@ -31,6 +31,10 @@
   --attn-soft:#FBEAE3;
   --attn-line:#EDC3B1;
 
+  /* waiting is neither good news nor bad: amber says "not your turn yet" */
+  --wait:#9A6700;
+  --wait-soft:#FBF2DA;
+
   --sel-bg:#14664A;
   --sel-ink:#FFFFFF;
 
@@ -217,21 +221,47 @@ a{color:inherit;text-decoration:none}
 /* ---------------- live status ---------------- */
 .status{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:18px}
 .beacon{width:11px;height:11px;border-radius:50%;background:var(--faint);flex:none;position:relative}
-.beacon.live{background:var(--accent)}
-.beacon.live::after{content:"";position:absolute;inset:-5px;border-radius:50%;
-  border:2px solid var(--accent);animation:ping 1.6s var(--ease) infinite}
-.beacon.done{background:var(--accent)}
+.beacon.live{background:var(--accent);color:var(--accent)}
+.beacon.waiting{background:var(--wait);color:var(--wait)}
+.beacon.live::after,.beacon.waiting::after{content:"";position:absolute;inset:-5px;
+  border-radius:50%;border:2px solid currentColor;animation:ping 1.6s var(--ease) infinite}
+.beacon.done{background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.beacon.failed{background:var(--attn);box-shadow:0 0 0 3px var(--attn-soft)}
 @keyframes ping{0%{transform:scale(.55);opacity:.75}100%{transform:scale(1.6);opacity:0}}
 .state-label{display:flex;flex-direction:column;gap:1px;min-width:0}
 .state-label .now{font-size:17px;font-weight:600;letter-spacing:-.015em}
 .state-label .sub{font-size:12px;color:var(--muted)}
 .clock{margin-left:auto;font-size:30px;font-weight:600;letter-spacing:-.03em;line-height:1}
 .phases{display:flex;align-items:center;flex-wrap:wrap;padding:0 18px 16px}
-.phase{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--faint);transition:color .3s var(--ease)}
-.phase .pip{width:7px;height:7px;border-radius:50%;background:var(--border-strong);transition:background .3s var(--ease)}
-.phase.on{color:var(--ink-2)} .phase.on .pip{background:var(--accent)}
-.phase.past{color:var(--muted)} .phase.past .pip{background:var(--accent-line)}
-.phase-gap{flex:1;min-width:14px;height:1px;background:var(--border);margin:0 10px}
+.phase{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--faint);
+  transition:color .3s var(--ease)}
+.phase .pip{width:8px;height:8px;border-radius:50%;background:var(--border-strong);
+  flex:none;position:relative;transition:background .3s var(--ease),box-shadow .3s var(--ease)}
+
+/* Colour carries the state; the pulse only says "this one is happening now". */
+.phase.past{color:var(--muted)}
+.phase.past .pip{background:var(--accent)}          /* behind us, went fine   */
+.phase.on{color:var(--ink);font-weight:600}
+.phase.on.queued .pip{background:var(--muted)}      /* accepted, not moving   */
+.phase.on.ringing .pip{background:var(--wait)}      /* waiting on a human     */
+.phase.on.active .pip{background:var(--accent)}     /* talking                */
+.phase.on.finished{color:var(--accent-ink)}
+.phase.on.finished .pip{background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.phase.on.failed{color:var(--attn)}
+.phase.on.failed .pip{background:var(--attn);box-shadow:0 0 0 3px var(--attn-soft)}
+
+/* only the live step pulses, in its own colour */
+.phase.on.ringing .pip::after,
+.phase.on.active .pip::after{
+  content:"";position:absolute;inset:-4px;border-radius:50%;
+  border:2px solid currentColor;animation:ping 1.6s var(--ease) infinite;
+}
+.phase.on.ringing .pip{color:var(--wait)}
+.phase.on.active .pip{color:var(--accent)}
+
+.phase-gap{flex:1;min-width:14px;height:2px;border-radius:2px;background:var(--border);
+  margin:0 10px;transition:background .35s var(--ease)}
+.phase-gap.done{background:var(--accent-line)}
 
 /* ---------------- stock ---------------- */
 .cap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(206px,1fr));gap:12px}
@@ -325,3 +355,10 @@ a{color:inherit;text-decoration:none}
 .callrow dd{margin:0;font-weight:600}
 .consent-note{display:flex;gap:9px;align-items:center;margin-top:14px;padding:10px 12px;
   border-radius:8px;background:var(--accent-soft);color:var(--accent-ink);font-size:12.5px}
+
+.chip.live-chip{background:var(--wait-soft);color:var(--wait)}
+
+/* a history row is clickable again, and says so */
+.row[data-detail],.row[data-fail],.row[data-live]{cursor:pointer}
+.row[data-detail]:hover .row-title{color:var(--accent-ink)}
+.row[data-fail]:hover .row-title{color:var(--attn)}

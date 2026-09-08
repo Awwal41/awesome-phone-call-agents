@@ -56,7 +56,8 @@ SUPPORTED = [r.strip() for r in os.environ.get(
 BLOCKED = {r.strip() for r in os.environ.get("SHOPVOICE_BLOCKED_REGIONS", "").split(",") if r.strip()}
 # Currencies offered per shop. The first is the default for a new shop.
 CURRENCIES = [c.strip().upper() for c in os.environ.get(
-    "SHOPVOICE_CURRENCIES", "NGN,USD,GBP,EUR,KES,GHS,ZAR,INR").split(",") if c.strip()]
+    "SHOPVOICE_CURRENCIES",
+    "NGN,GHS,KES,ZAR,INR,USD,GBP,EUR,CAD,AUD,SGD,AED,PHP").split(",") if c.strip()]
 # Units a shop owner actually says on the phone. Suggestions, not a whitelist:
 # the field stays free text so an unusual unit is never blocked.
 UNITS = [u.strip() for u in os.environ.get(
@@ -67,19 +68,50 @@ UNITS = [u.strip() for u in os.environ.get(
     # India
     "kg,litres,packets,dozens,sacks,quintals,strips").split(",") if u.strip()]
 
-# What CALL-E speaks. Only offer what the account actually supports.
-LOCALES = [l.strip() for l in os.environ.get(
-    "SHOPVOICE_LOCALES", "en,hi").split(",") if l.strip()]
-LOCALE_NAMES = {"en": "English", "hi": "Hindi", "ar": "Arabic",
-                "fr": "French", "pt": "Portuguese", "es": "Spanish"}
+# A "voice" is the one question an operator can actually answer: what should
+# the owner hear? Locale and style are the two fields underneath it, and
+# keeping them as separate dropdowns made the form answer a question nobody
+# asked.
+VOICES = [
+    {"id": "english",        "name": "English",         "locale": "en", "style": "english"},
+    {"id": "pidgin-english", "name": "Nigerian Pidgin", "locale": "en", "style": "pidgin-english"},
+    {"id": "hindi",          "name": "Hindi",           "locale": "hi", "style": "english"},
+]
+VOICE_BY_ID = {v["id"]: v for v in VOICES}
 
-# How it speaks. This is prompt guidance, not a CALL-E field, so it is free to
-# be local: a Lagos shop and a Pune shop want different registers.
-STYLES = [x.strip() for x in os.environ.get(
-    "SHOPVOICE_STYLES", "english,pidgin-english").split(",") if x.strip()]
-STYLE_NAMES = {"english": "Plain English",
-               "pidgin-english": "Nigerian Pidgin",
-               "hinglish": "Hindi-English mix"}
+# Reference data, not business configuration: dialling codes and country names
+# do not change per deployment. SHOPVOICE_REGIONS still decides which of these
+# are offered, and every default below is only a default.
+COUNTRY_INFO = {
+    "NG": ("Nigeria",        "234", "NGN", "pidgin-english"),
+    "GH": ("Ghana",          "233", "GHS", "english"),
+    "KE": ("Kenya",          "254", "KES", "english"),
+    "ZA": ("South Africa",    "27", "ZAR", "english"),
+    "IN": ("India",           "91", "INR", "hindi"),
+    "US": ("United States",    "1", "USD", "english"),
+    "GB": ("United Kingdom",  "44", "GBP", "english"),
+    "CA": ("Canada",           "1", "CAD", "english"),
+    "AU": ("Australia",       "61", "AUD", "english"),
+    "SG": ("Singapore",       "65", "SGD", "english"),
+    "AE": ("United Arab Emirates", "971", "AED", "english"),
+    "PH": ("Philippines",     "63", "PHP", "english"),
+}
+
+
+def countries() -> list[dict]:
+    """Offered countries, each carrying the defaults it implies."""
+    out = []
+    for code in SUPPORTED:
+        name, dial, currency, voice = COUNTRY_INFO.get(
+            code, (code, "", CURRENCIES[0], VOICES[0]["id"]))
+        out.append({
+            "code": code, "name": name, "dial": dial,
+            # only suggest a currency the deployment actually offers
+            "currency": currency if currency in CURRENCIES else CURRENCIES[0],
+            "voice": voice if voice in VOICE_BY_ID else VOICES[0]["id"],
+            "blocked": code in BLOCKED,
+        })
+    return out
 
 # Lists are read once at import, so a running server can be older than the
 # files on disk. The console needs to be able to say so.
@@ -224,6 +256,44 @@ def calls_for(shop_id: str) -> list[dict]:
         conn.close()
 
 
+def attempts_for(shop_id: str) -> list[dict]:
+    """Calls that were attempted, from the checkpoints.
+
+    The ledger only records calls that completed and passed the confidence
+    gate, so a refused or failed call leaves no trace there. An operator still
+    needs to see it: "no calls yet" after two failed attempts is a lie, and it
+    hides the reason they failed.
+    """
+    provider_hash = live_call.provider_account_hash(
+        os.environ.get("CALLE_API_KEY") or "demo")
+    folder = live_call.STATE_DIR / provider_hash
+    if not folder.is_dir():
+        return []
+    out = []
+    for path in sorted(folder.glob("*.json")):
+        try:
+            cp = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        key = cp.get("idempotency_key") or ""
+        if not key.startswith(f"shopvoice-{shop_id}-"):
+            continue
+        rest = key[len(f"shopvoice-{shop_id}-"):]
+        parts = rest.split("-")
+        if len(parts) < 4:
+            continue
+        out.append({
+            "call_id": cp.get("call_id"),
+            "call_type": parts[0],
+            "date": "-".join(parts[1:4]),
+            "phase": cp.get("phase"),
+            "status": cp.get("status"),
+            "error": cp.get("error"),
+            "created_at": cp.get("updated_at") or "",
+        })
+    return out
+
+
 def today_for(shop_id: str) -> dict:
     """What has already been dialled for this shop today.
 
@@ -290,7 +360,10 @@ def call_detail(call_id: str) -> dict:
 # --------------------------------------------------------------------------
 
 def save_customer(body: dict) -> dict:
-    body.setdefault("locale", LOCALES[0])
+    voice = VOICE_BY_ID.get(str(body.get("voice") or ""))
+    if voice and not body.get("locale"):
+        body["locale"] = voice["locale"]
+    body.setdefault("locale", VOICES[0]["locale"])
     for field in ("shop_id", "phone", "region", "locale"):
         if not str(body.get(field) or "").strip():
             raise ApiError(400, f"{field} is required.")
@@ -301,7 +374,9 @@ def save_customer(body: dict) -> dict:
         "region": body["region"].strip().upper(),
         "locale": body["locale"].strip(),
         "currency": (body.get("currency") or CURRENCIES[0]).strip().upper(),
-        "language_style": (body.get("language_style") or STYLES[0]).strip(),
+        "language_style": (body.get("language_style")
+                           or VOICE_BY_ID.get(str(body.get("voice") or ""), {}).get("style")
+                           or VOICES[0]["style"]),
         "consent_timestamp": body.get("consent_timestamp") or _now(),
         "typical_products": [
             {"name": p["name"].strip(), "unit": (p.get("unit") or "").strip() or None}
@@ -349,7 +424,7 @@ def build_request(shop: dict, body: dict) -> dict:
         "shop_id": shop["id"],
         "recipient_consented": True,
         "language_style": body.get("language_style")
-                          or shop.get("language_style") or STYLES[0],
+                          or shop.get("language_style") or VOICES[0]["style"],
         "products_to_ask": products,
         "max_minutes": int(body.get("max_minutes") or 4),
     }
@@ -384,6 +459,7 @@ def start_checkin(body: dict) -> dict:
     key = uuid.uuid4().hex[:12]
     with RUNS_LOCK:
         RUNS[key] = {"key": key, "phase": "queued", "elapsed": 0.0, "status": "queued",
+                     "call_type": request["call_type"],
                      "demo": DEMO, "shop_id": shop["id"], "started": time.time(),
                      "masked_phone": live_call.mask_phone(shop["phone_e164"]),
                      "attempt": attempt,
@@ -528,15 +604,38 @@ class Handler(BaseHTTPRequestHandler):
                     "started_at": STARTED_AT, "config_keys": list(CONFIG_KEYS),
                     "regions": SUPPORTED, "blocked": sorted(BLOCKED),
                     "currencies": CURRENCIES, "units": UNITS,
-                    "locales": [{"code": l, "name": LOCALE_NAMES.get(l, l)} for l in LOCALES],
-                    "styles": [{"code": x, "name": STYLE_NAMES.get(x, x)} for x in STYLES],
+                    "countries": countries(), "voices": VOICES,
                 })
             if parts == ["customers"]:
                 return self._json(200, {"customers": customers()})
             if len(parts) == 2 and parts[0] == "customers":
                 return self._json(200, customer(parts[1]))
             if len(parts) == 3 and parts[0] == "customers" and parts[2] == "calls":
-                return self._json(200, {"calls": calls_for(parts[1])})
+                ledger = calls_for(parts[1])
+                seen = {c["call_id"] for c in ledger}
+                with RUNS_LOCK:
+                    live = [dict(r) for r in RUNS.values()
+                            if r.get("shop_id") == parts[1] and not r.get("done")]
+                running = [{
+                    "key": r["key"],
+                    "call_id": r.get("call_id") or ("run-" + r["key"]),
+                    "call_type": r.get("call_type") or "inventory",
+                    "date": date.today().isoformat(),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "outcome": "running", "phase": r.get("phase"),
+                    "elapsed": r.get("elapsed", 0),
+                    "accepted": 0, "confidence": None, "products": [], "low": 0,
+                } for r in live]
+                unrecorded = [
+                    {**a, "accepted": 0, "confidence": None, "products": [], "low": 0,
+                     "outcome": "failed",
+                     "call_id": a["call_id"] or ("attempt-" + a["created_at"])}
+                    for a in attempts_for(parts[1])
+                    if a["call_id"] not in seen and a.get("phase") != "finished"
+                ]
+                merged = sorted(running + ledger + unrecorded,
+                                key=lambda c: c.get("created_at") or "", reverse=True)
+                return self._json(200, {"calls": merged})
             if len(parts) == 3 and parts[0] == "customers" and parts[2] == "today":
                 return self._json(200, today_for(parts[1]))
             if len(parts) == 2 and parts[0] == "calls":

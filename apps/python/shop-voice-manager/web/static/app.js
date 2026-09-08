@@ -12,13 +12,35 @@ const mmss = s => Math.floor(s/60) + ":" + String(Math.floor(s%60)).padStart(2,"
 const CHEV = '<svg class="chev" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-function localeName(code){
-  const hit = (CONFIG.locales || []).find(l => l.code === code);
-  return hit ? hit.name : (code || "English");
+/* A <select> with no options opens and shuts instantly, which reads as a
+   broken control rather than as missing data. These keep every dropdown
+   populated even when the server is older than the page and sends nothing. */
+function countryList(){
+  if((CONFIG.countries || []).length) return CONFIG.countries;
+  return (CONFIG.regions || []).map(code => ({
+    code: code, name: code, dial: "", currency: "", voice: "",
+    blocked: (CONFIG.blocked || []).includes(code),
+  }));
 }
-function styleName(code){
-  const hit = (CONFIG.styles || []).find(x => x.code === code);
-  return hit ? hit.name : (code || "Plain English");
+function currencyList(){
+  return (CONFIG.currencies || []).length ? CONFIG.currencies : ["NGN"];
+}
+function voiceList(){
+  if((CONFIG.voices || []).length) return CONFIG.voices;
+  return [{id:"english", name:"English", locale:"en", style:"english"}];
+}
+
+function countryOf(code){
+  return countryList().find(c => c.code === code)
+    || {code:code, name:code, dial:"", currency:"", voice:""};
+}
+function voiceOf(id){ return voiceList().find(v => v.id === id) || null; }
+/* A shop stores locale + style. Map the pair back to the single word the form
+   offered, so the detail page and the form agree. */
+function voiceName(locale, style){
+  const hit = voiceList().find(v => v.style === style && v.locale === locale)
+           || voiceList().find(v => v.style === style);
+  return hit ? hit.name : (style || "English");
 }
 function niceDate(iso){
   if(!iso) return "–";
@@ -46,11 +68,18 @@ async function api(path, options){
 }
 
 let CONFIG_RAW = null;
-let CONFIG = {live:false, demo:false, regions:[], blocked:[], currencies:[], units:[], locales:[], styles:[]};
+let STALE_SERVER = false;
+let CONFIG = {live:false, demo:false, regions:[], blocked:[], currencies:[], units:[], countries:[], voices:[]};
 let poll = null;
 
 function banner(text, isError){
   return '<div class="banner' + (isError ? " err" : "") + '">' + esc(text) + "</div>";
+}
+function staleBanner(){
+  return STALE_SERVER
+    ? banner("This page is newer than the running server, so some lists are "
+             + "incomplete. Restart the server to pick them up.", true)
+    : "";
 }
 function modeBanner(){
   if(CONFIG.demo) return banner("Demo mode. Starting a check-in replays a stored call and places no calls.");
@@ -96,17 +125,17 @@ function slugify(v){
 }
 
 function pageAdd(){
-  const regions = CONFIG.regions.map(r =>
-    '<option value="' + r + '">' + r + "</option>").join("");
-  const currencies = CONFIG.currencies.map(c =>
-    '<option value="' + c + '">' + c + "</option>").join("");
-  const locales = (CONFIG.locales || []).map(l =>
-    '<option value="' + esc(l.code) + '">' + esc(l.name) + "</option>").join("");
-  const styles = (CONFIG.styles || []).map(x =>
-    '<option value="' + esc(x.code) + '">' + esc(x.name) + "</option>").join("");
+  const regions = countryList().map(c =>
+    '<option value="' + esc(c.code) + '">' + esc(c.name)
+    + (c.dial ? "  +" + esc(c.dial) : "") + "</option>").join("");
+  const currencies = currencyList().map(c =>
+    '<option value="' + esc(c) + '">' + esc(c) + "</option>").join("");
+  const voices = voiceList().map(v =>
+    '<option value="' + esc(v.id) + '">' + esc(v.name) + "</option>").join("");
   const units = (CONFIG.units || []).map(u => '<option value="' + esc(u) + '">').join("");
 
-  return '<div class="crumb"><a href="#/customers">Customers</a><span class="sep">/</span><span>Add a shop</span></div>'
+  return staleBanner()
+  + '<div class="crumb"><a href="#/customers">Customers</a><span class="sep">/</span><span>Add a shop</span></div>'
   + '<div class="page-head center"><div><h1>Add a shop</h1>'
   + "<p>Consent is recorded here, once.</p></div></div>"
   + '<section class="panel raised">'
@@ -127,10 +156,9 @@ function pageAdd(){
     + '<div class="split even">'
       + '<div class="field"><label for="aCur">Currency</label>'
         + '<select class="select" id="aCur">' + currencies + "</select></div>"
-      + '<div class="field"><label for="aLocale">Language</label>'
-        + '<select class="select" id="aLocale">' + locales + "</select></div></div>"
-    + '<div class="field"><label for="aStyle">How CALL-E should speak</label>'
-      + '<select class="select" id="aStyle">' + styles + "</select></div></div>"
+      + '<div class="field"><label for="aVoice">What the owner hears</label>'
+        + '<select class="select" id="aVoice">' + voices + "</select></div></div>"
+    + "</div>"
 
   + '<div class="formsec"><h3>What to ask about</h3>'
     + '<div class="ptable"><div class="phead"><span>Product</span><span>Unit</span><span></span></div>'
@@ -191,10 +219,17 @@ function wireAdd(){
   addProducts = [{name:"", unit:""}];
   productRows("aProducts", addProducts, gateAdd);
 
-  const regionHelp = () => {
-    const r = $("aRegion").value;
-    $("aRegionHelp").textContent = CONFIG.blocked.includes(r)
-      ? r + " is not enabled on this account yet, so calls to it are refused. You can still save the shop."
+  // The country implies a currency and a language. Apply them until the
+  // operator overrides one, then leave their choice alone.
+  let curTouched = false, voiceTouched = false;
+  const applyCountry = () => {
+    const c = countryOf($("aRegion").value);
+    if(!curTouched && c.currency) $("aCur").value = c.currency;
+    if(!voiceTouched && c.voice) $("aVoice").value = c.voice;
+    if(c.dial) $("aPhone").placeholder = "+" + c.dial + " 800 000 0000";
+    $("aRegionHelp").textContent = c.blocked
+      ? c.name + " is switched off for this account, so calls to it are refused. "
+        + "You can still save the shop."
       : "";
   };
 
@@ -261,7 +296,9 @@ function wireAdd(){
     if(clean !== $("aId").value){ $("aId").value = clean; queueCheck(); }
   });
   $("aPhone").addEventListener("input", gateAdd);
-  $("aRegion").addEventListener("change", () => { regionHelp(); gateAdd(); });
+  $("aRegion").addEventListener("change", () => { applyCountry(); gateAdd(); });
+  $("aCur").addEventListener("change", () => { curTouched = true; });
+  $("aVoice").addEventListener("change", () => { voiceTouched = true; });
   $("aConsent").addEventListener("change", gateAdd);
   $("aAdd").addEventListener("click", () => {
     addProducts.push({name:"", unit:""});
@@ -281,9 +318,9 @@ function wireAdd(){
         display_name: $("aName").value.trim(),
         phone: $("aPhone").value.trim(),
         region: $("aRegion").value,
-        locale: $("aLocale").value,
+        locale: (voiceOf($("aVoice").value) || {}).locale || "en",
         currency: $("aCur").value,
-        language_style: $("aStyle").value,
+        voice: $("aVoice").value,
         products: addProducts.filter(p => p.name.trim()),
       })});
       location.hash = "#/customer/" + encodeURIComponent(saved.id);
@@ -296,7 +333,7 @@ function wireAdd(){
     }
   });
 
-  regionHelp();
+  applyCountry();
   gateAdd();
 }
 
@@ -307,10 +344,37 @@ async function pageCustomer(id){
     api("/customers/" + encodeURIComponent(id) + "/calls"),
   ]);
   const history = calls.length ? calls.map(c => {
+    // An attempt that never reached the ledger has no result to open, so it
+    // states what happened instead of pretending to be a record.
+    if(c.outcome === "running"){
+      const label = {queued:"Queued", ringing:"Ringing", in_progress:"On the call"}[c.phase] || "Running";
+      return '<div class="row" data-live="' + esc(c.key || "")
+        + '" data-shop="' + esc(shop.id) + '">'
+        + '<div class="row-main"><span class="row-title">' + niceDate(c.date) + "</span>"
+        + '<span class="row-sub">Call in progress</span></div>'
+        + '<div class="row-end">'
+        + '<span class="chip ' + (c.call_type === "sales" ? "sal" : "inv") + '">'
+        + esc(c.call_type) + "</span>"
+        + '<span class="chip live-chip">' + esc(label) + "</span>"
+        + '<div class="row-stat"><span class="v num">' + mmss(c.elapsed || 0)
+        + '</span><span class="k">Elapsed</span></div>' + CHEV + "</div></div>";
+    }
+    if(c.outcome === "failed"){
+      FAILURES[c.call_id] = c;
+      return '<div class="row" data-fail="' + esc(c.call_id) + '">'
+        + '<div class="row-main"><span class="row-title">' + niceDate(c.date) + "</span>"
+        + '<span class="row-sub" style="color:var(--attn)">'
+        + esc(c.error || "Abandoned before CALL-E was asked to create the call.")
+        + "</span></div>"
+        + '<div class="row-end">'
+        + '<span class="chip ' + (c.call_type === "sales" ? "sal" : "inv") + '">'
+        + esc(c.call_type) + "</span>"
+        + '<span class="chip low">Not placed</span>' + CHEV + "</div></div>";
+    }
     const right = c.revenue != null
       ? '<div class="row-stat"><span class="v num">' + money(c.revenue, shop.currency) + '</span><span class="k">Sales</span></div>'
       : '<div class="row-stat"><span class="v num">' + (c.products || []).length + '</span><span class="k">Items</span></div>';
-    return '<div class="row" data-go="#/call/' + encodeURIComponent(c.call_id) + '">'
+    return '<div class="row" data-detail="' + esc(c.call_id) + '">'
       + '<div class="row-main"><span class="row-title">' + niceDate(c.date) + "</span>"
       + '<span class="row-sub">' + esc(c.call_id) + "</span></div>"
       + '<div class="row-end">'
@@ -333,9 +397,8 @@ async function pageCustomer(id){
       + '<section class="panel"><div class="panel-head"><h2>Details</h2></div><div class="panel-body">'
       + '<dl class="kv"><dt>Shop ID</dt><dd class="num">' + esc(shop.id) + "</dd>"
       + "<dt>Phone</dt><dd class=\"num\">" + mask(shop.phone_e164) + "</dd>"
-      + "<dt>Country</dt><dd>" + esc(shop.region) + "</dd>"
-      + "<dt>Language</dt><dd>" + esc(localeName(shop.locale)) + "</dd>"
-      + "<dt>Speaks</dt><dd>" + esc(styleName(shop.language_style)) + "</dd>"
+      + "<dt>Country</dt><dd>" + esc(countryOf(shop.region).name) + "</dd>"
+      + "<dt>Owner hears</dt><dd>" + esc(voiceName(shop.locale, shop.language_style)) + "</dd>"
       + "<dt>Currency</dt><dd>" + esc(shop.currency) + "</dd>"
       + "<dt>Consent</dt><dd>" + (shop.created_at ? niceDate(shop.created_at) : "on file") + "</dd></dl></div></section>"
       + '<section class="panel"><div class="panel-head"><h2>Schedule</h2></div><div class="panel-body">'
@@ -349,7 +412,16 @@ async function pageCustomer(id){
           : '<span class="note">None recorded.</span>') + "</div></section>"
     + "</div>"
     + '<section class="panel"><div class="panel-head"><h2>Call history</h2>'
-      + '<span class="note">' + calls.length + (calls.length === 1 ? " call" : " calls") + "</span></div>"
+      + '<span class="note">' + (function(){
+          const live = calls.filter(c => c.outcome === "running").length;
+          const bad  = calls.filter(c => c.outcome === "failed").length;
+          const done = calls.length - live - bad;
+          const bits = [];
+          if(done) bits.push(done + (done === 1 ? " call" : " calls"));
+          if(live) bits.push(live + " in progress");
+          if(bad)  bits.push(bad + " not placed");
+          return bits.length ? bits.join(", ") : "none yet";
+        })() + "</span></div>"
       + '<div class="rows">' + history + "</div></section></div>";
 }
 
@@ -410,6 +482,118 @@ let newProducts = [];
 
 let modalProducts = [], modalShop = null;
 
+/* Rows stay one line. The reason a call was refused is often a paragraph, so
+   it belongs in the dialog rather than stretching the list. */
+const FAILURES = {};
+
+/* Rejoin a call that is already running. The run lives on the server, so the
+   dialog can attach to it at any time, including from a fresh page load. */
+async function openLiveRun(key, shopId){
+  if(!key) return;
+  const d = $("callModal");
+  let shop;
+  try{ shop = await api("/customers/" + encodeURIComponent(shopId)); }
+  catch(e){ return; }
+  $("mTitle").textContent = "Check-in call";
+  $("mSub").textContent = shop.display_name || shop.id;
+  renderCallLive();
+  if(!d.open) d.showModal();
+  followInBackground();
+  watch(key, shop);
+}
+
+function openFailure(id){
+  const c = FAILURES[id];
+  if(!c) return;
+  const d = $("callModal");
+  $("mTitle").textContent = "Call not placed";
+  $("mSub").textContent = niceDate(c.date) + "  ·  " + (c.call_type || "");
+  $("mBody").innerHTML =
+      '<div class="warnline" style="display:block">'
+      + esc(c.error || "Abandoned before CALL-E was asked to create the call.")
+      + "</div>"
+    + '<dl class="callrow" style="margin-top:16px"><dt>Reached</dt><dd>'
+      + esc({create_rejected:"CALL-E refused to create the call",
+             reserved:"Never sent to CALL-E",
+             create_failed:"CALL-E returned no call id"}[c.phase] || c.phase || "unknown")
+      + "</dd></dl>"
+    + '<dl class="callrow"><dt>Cost</dt><dd>Nothing. No call was placed.</dd></dl>';
+  $("mFoot").innerHTML = '<span class="spacer"></span>'
+    + '<button class="btn" id="mClose" type="button">Close</button>';
+  $("mClose").addEventListener("click", closeCall);
+  if(!d.open) d.showModal();
+}
+
+/* A finished call opens in the dialog too. Navigating to a page lost the
+   operator's place in the shop, and the shop is the context that makes the
+   call mean anything. #/call/<id> still works as a deep link. */
+async function openCallDetail(callId){
+  const d = $("callModal");
+  $("mTitle").textContent = "Call detail";
+  $("mSub").textContent = callId;
+  $("mBody").innerHTML = '<p class="loading">Loading</p>';
+  $("mFoot").innerHTML = '<span class="spacer"></span>'
+    + '<button class="btn ghost" id="mClose" type="button">Close</button>';
+  $("mClose").addEventListener("click", closeCall);
+  if(!d.open) d.showModal();
+
+  let c;
+  try{ c = await api("/calls/" + encodeURIComponent(callId)); }
+  catch(e){
+    $("mBody").innerHTML = '<p class="note" style="color:var(--attn)">'
+      + esc(e.message) + "</p>";
+    return;
+  }
+
+  $("mTitle").textContent = c.call_type === "sales" ? "Sales call" : "Inventory check-in";
+  $("mSub").textContent = niceDate(c.date) + "  ·  " + (c.call_id || "");
+
+  const stock = (c.products || []).length
+    ? '<div class="sub-label" style="margin-top:18px">Stock</div><div class="cap-grid">'
+      + c.products.map(pr =>
+          '<div class="cap filled' + (pr.running_low ? " low" : "") + '">'
+          + '<div class="cap-top"><span class="cap-name">' + esc(pr.name) + "</span>"
+          + '<span class="chip ' + (pr.running_low ? "low" : "ok") + '">'
+          + (pr.running_low ? "Low" : "Stocked") + "</span></div>"
+          + '<div class="qty"><span class="n num">' + (pr.qty == null ? "–" : pr.qty)
+          + '</span><span class="u">' + esc(pr.unit || "") + "</span></div></div>").join("")
+      + "</div>"
+    : "";
+
+  const turns = (c.transcript || []).map(t =>
+    '<div class="turn ' + esc(t.who) + '"><span class="at">' + mmss(t.at) + "</span>"
+    + '<div><div class="bubble"><div class="who">'
+    + (t.who === "bot" ? "CALL-E" : "Owner") + "</div>" + esc(t.text)
+    + "</div></div></div>").join("");
+
+  $("mBody").innerHTML =
+      '<dl class="callrow"><dt>Status</dt><dd>' + esc(c.status || "unknown") + "</dd></dl>"
+    + '<dl class="callrow"><dt>Confidence</dt><dd class="num">'
+      + (c.confidence == null ? "–" : Number(c.confidence).toFixed(2)) + "</dd></dl>"
+    + '<dl class="callrow"><dt>Talk time</dt><dd class="num">'
+      + (c.duration ? mmss(c.duration) : "–") + "</dd></dl>"
+    + '<dl class="callrow"><dt>Ledger</dt><dd>'
+      + (c.accepted ? "accepted" : "rejected") + "</dd></dl>"
+    + (c.notes ? '<div class="notecard" style="margin-top:18px">'
+        + '<div class="sub-label">Owner note</div>'
+        + '<p class="hand" style="margin:0">' + esc(c.notes) + "</p></div>" : "")
+    + stock
+    + ((c.evidence || []).length
+        ? '<div class="sub-label" style="margin-top:18px">Evidence</div>'
+          + '<ul class="evidence">' + c.evidence.map(e => "<li>" + esc(e) + "</li>").join("")
+          + "</ul>" : "")
+    + (turns
+        ? '<div class="sub-label" style="margin-top:18px">Transcript</div>' + turns
+        : '<p class="tempty">No transcript stored for this call.</p>');
+
+  $("mFoot").innerHTML =
+      '<a class="fineprint" href="#/call/' + encodeURIComponent(c.call_id)
+      + '" style="color:var(--accent-ink);font-weight:600">Open as a page</a>'
+    + '<span class="spacer"></span>'
+    + '<button class="btn" id="mClose" type="button">Close</button>';
+  $("mClose").addEventListener("click", closeCall);
+}
+
 function closeCall(){
   clearInterval(poll); poll = null;
   const d = $("callModal");
@@ -438,8 +622,8 @@ function renderCallForm(){
   $("mBody").innerHTML =
       '<dl class="callrow"><dt>Number</dt><dd class="num">' + mask(s.phone_e164) + "</dd></dl>"
     + '<dl class="callrow"><dt>Country</dt><dd>' + esc(s.region) + "</dd></dl>"
-    + '<dl class="callrow"><dt>Speaks</dt><dd>' + esc(styleName(s.language_style))
-      + " (" + esc(localeName(s.locale)) + ")</dd></dl>"
+    + '<dl class="callrow"><dt>Owner hears</dt><dd>'
+      + esc(voiceName(s.locale, s.language_style)) + "</dd></dl>"
     + '<dl class="callrow"><dt>Call type</dt><dd style="font-weight:400;width:230px">'
       + '<select class="select" id="mType">'
       + '<option value="inventory">Morning inventory check-in</option>'
@@ -523,6 +707,7 @@ async function startCall(){
   const products = modalProducts.filter(p => p.name.trim());
   const repeat = alreadyCalledToday();
   renderCallLive();
+  followInBackground();
   try{
     const {key} = await api("/checkins", {method:"POST", body: JSON.stringify({
       shop_id: shop.id, call_type: type, products: products, consent: true,
@@ -530,7 +715,8 @@ async function startCall(){
     })});
     watch(key, shop);
   }catch(e){
-    $("beacon").className = "beacon";
+    $("beacon").className = "beacon failed";
+    renderPhases("failed");
     $("statusNow").textContent = "Refused";
     $("statusSub").textContent = "";
     $("resultBody").innerHTML = '<span style="color:var(--attn)">' + esc(e.message) + "</span>";
@@ -546,7 +732,12 @@ function watch(key, shop){
     catch(e){ clearInterval(poll); return; }
     $("clock").textContent = mmss(run.elapsed || 0);
     renderPhases(run.phase);
-    $("beacon").className = "beacon" + (run.phase === "completed" ? " done" : run.phase === "failed" ? "" : " live");
+    $("beacon").className = "beacon" + (
+        run.phase === "completed" ? " done"
+      : run.phase === "failed"    ? " failed"
+      : run.phase === "ringing"   ? " waiting"
+      : run.phase === "queued"    ? " waiting"
+      :                             " live");
     $("statusNow").textContent = {queued:"Queued", ringing:"Ringing", in_progress:"On the call",
       completed:"Completed", failed:"Failed"}[run.phase] || run.phase;
     $("statusSub").textContent =
@@ -557,6 +748,8 @@ function watch(key, shop){
 
     if(run.done){
       clearInterval(poll);
+      clearInterval(bgTimer); bgTimer = null;
+      render();                       // land the final row behind the dialog
       const cid = (run.result && run.result.call_id) || run.call_id;
       if(run.error){
         $("resultBody").innerHTML = '<span style="color:var(--attn)">' + esc(run.error) + "</span>";
@@ -572,15 +765,34 @@ function watch(key, shop){
   }, 1000);
 }
 
+/* Each step gets a colour for what it means, so the strip reads at a glance
+   without waiting to see which dot is pulsing. */
+const PHASE_TONE = {queued:"queued", ringing:"ringing", in_progress:"active",
+                    completed:"finished", failed:"failed"};
+
 function renderPhases(active){
   const host = $("phases");
   if(!host) return;
-  const P = [["queued","Queued"],["ringing","Ringing"],["in_progress","On the call"],["completed","Done"]];
-  const idx = P.findIndex(x => x[0] === active);
-  host.innerHTML = P.map((x, i) =>
-    '<span class="phase' + (i === idx ? " on" : i < idx ? " past" : "") + '">'
-    + '<span class="pip"></span>' + x[1] + "</span>"
-    + (i < P.length - 1 ? '<span class="phase-gap"></span>' : "")).join("");
+  const P = [["queued","Queued"], ["ringing","Ringing"],
+             ["in_progress","On the call"], ["completed","Done"]];
+  const failed = active === "failed";
+  // a failed call stops wherever it got to; nothing after it is "done"
+  const idx = failed ? -1 : P.findIndex(x => x[0] === active);
+  const tone = PHASE_TONE[active] || "queued";
+
+  host.innerHTML = P.map((x, i) => {
+    const state = i === idx ? " on " + tone : i < idx ? " past" : "";
+    const gapDone = i < idx ? " done" : "";
+    return '<span class="phase' + state + '"><span class="pip"></span>' + x[1] + "</span>"
+      + (i < P.length - 1 ? '<span class="phase-gap' + gapDone + '"></span>' : "");
+  }).join("");
+
+  if(failed){
+    // mark the strip as stopped rather than pretending it is still queued
+    host.insertAdjacentHTML("beforeend",
+      '<span class="phase on failed" style="margin-left:12px">'
+      + '<span class="pip"></span>Stopped</span>');
+  }
 }
 
 /* ------------------------------ schedule ------------------------------ */
@@ -600,8 +812,7 @@ async function pageSchedule(){
 }
 
 /* ------------------------------ router ------------------------------ */
-async function route(){
-  closeCall();
+async function render(){
   const raw = (location.hash || "#/customers").replace(/^#\//, "");
   const [pathPart, queryPart] = raw.split("?");
   const parts = pathPart.split("/").filter(Boolean);
@@ -621,12 +832,38 @@ async function route(){
       + '<div><a class="btn ghost" href="#/customers">Back to customers</a></div></div></section>';
   }
   document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.nav === nav));
-  window.scrollTo(0,0);
+}
+
+async function route(){
+  closeCall();
+  await render();
+  window.scrollTo(0, 0);
+}
+
+/* Re-render the page underneath while a call runs. The dialog lives outside
+   #view, so replacing the view does not disturb it. */
+let bgTimer = null;
+function followInBackground(){
+  clearInterval(bgTimer);
+  bgTimer = setInterval(() => {
+    if(!$("callModal").open){ clearInterval(bgTimer); bgTimer = null; return; }
+    render();
+  }, 2000);
 }
 
 document.addEventListener("click", e => {
   const call = e.target.closest("[data-call]");
   if(call){ e.stopPropagation(); openCall(call.dataset.call); return; }
+  const live = e.target.closest("[data-live]");
+  if(live && live.dataset.live){
+    e.stopPropagation(); openLiveRun(live.dataset.live, live.dataset.shop); return;
+  }
+  const fail = e.target.closest("[data-fail]");
+  if(fail){ e.stopPropagation(); openFailure(fail.dataset.fail); return; }
+  const detail = e.target.closest("[data-detail]");
+  if(detail && !e.target.closest("a")){
+    e.stopPropagation(); openCallDetail(detail.dataset.detail); return;
+  }
   const row = e.target.closest("[data-go]");
   if(row && !e.target.closest("button") && !e.target.closest("a")) location.hash = row.dataset.go;
 });
@@ -635,6 +872,9 @@ window.addEventListener("hashchange", route);
 (async () => {
   try{ CONFIG_RAW = await api("/config"); CONFIG = Object.assign({}, CONFIG, CONFIG_RAW); }
   catch(e){ CONFIG_RAW = null; }
+  STALE_SERVER = !CONFIG_RAW
+    || !(CONFIG_RAW.countries || []).length
+    || !(CONFIG_RAW.voices || []).length;
   $("mX").addEventListener("click", closeCall);
   $("callModal").addEventListener("close", () => { clearInterval(poll); poll = null; });
   $("unitList").innerHTML = (CONFIG.units || [])
