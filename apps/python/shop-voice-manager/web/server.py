@@ -572,15 +572,57 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": str(exc)})
 
 
+def _watch_and_reload():
+    """Restart when a source file changes, so an edit does not need a manual
+    restart. Opt in with SHOPVOICE_RELOAD=1.
+
+    Never restarts while a call is in flight: the run state lives in memory,
+    and losing it mid-call would leave the operator with no status for a call
+    that is still ringing someone. The checkpoint would still protect the
+    budget, but the console would go blind, so the reload simply waits.
+    """
+    watched = [Path(__file__).resolve()] + [
+        APP_ROOT / name for name in
+        ("live_call.py", "client.py", "ingest.py", "store.py", "summarize.py")
+    ]
+    stamps = {}
+    for path in watched:
+        try:
+            stamps[path] = path.stat().st_mtime
+        except OSError:
+            pass
+    while True:
+        time.sleep(1.0)
+        for path, was in list(stamps.items()):
+            try:
+                now = path.stat().st_mtime
+            except OSError:
+                continue
+            if now == was:
+                continue
+            with RUNS_LOCK:
+                busy = any(not r.get("done") for r in RUNS.values())
+            if busy:
+                continue                       # try again on the next tick
+            print(f"\n  {path.name} changed, restarting")
+            sys.stdout.flush()
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
 def main() -> int:
     host = os.environ.get("SHOPVOICE_HOST", "127.0.0.1")
     port = int(os.environ.get("SHOPVOICE_PORT", "8765"))
     conn = _conn()
     conn.close()
     mode = "DEMO replay" if DEMO else ("live" if os.environ.get("CALLE_API_KEY") else "read only")
+    if os.environ.get("SHOPVOICE_RELOAD") == "1":
+        threading.Thread(target=_watch_and_reload, daemon=True).start()
+
     print(f"Shop Check-In console on http://{host}:{port}")
     print(f"  ledger  {DB_PATH}")
     print(f"  mode    {mode}")
+    print(f"  started {STARTED_AT}"
+          + ("  (auto-reload on)" if os.environ.get("SHOPVOICE_RELOAD") == "1" else ""))
     if not os.environ.get("CALLE_API_KEY") and not DEMO:
         print("  note    export CALLE_API_KEY to place calls, or SHOPVOICE_DEMO=1 to replay")
     ThreadingHTTPServer((host, port), Handler).serve_forever()
