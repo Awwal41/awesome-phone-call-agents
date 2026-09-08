@@ -71,6 +71,66 @@ Use these phrases in the CALL-E **task text**, not as a rigid script. CALL-E ada
 - If the owner is busy, offer to call back and end politely.
 - Never argue about prices, give investment advice, or promise loans.
 
+## Phase 2 — reorder offer (after low stock don show)
+
+**Ask**
+
+- "Fish and rice dey finish. You want make I place order?"
+- If yes: "How much you need?" then "Which vendor make I use — na who you dey buy from?"
+- If dem already get vendor for file: "Make I use [vendor name] like before, or you get another person?"
+- Never invent a vendor phone number — only save the number if the owner talk am.
+
+**If no** — "No wahala, I no go call anybody." End the call. Do not save any vendor.
+
+## Phase 2 — vendor order (calling the supplier)
+
+**Opening**
+
+- "Good day, I be AI assistant calling on behalf of [shop name]."
+- "I wan order [items] for the shop."
+
+**Ask**
+
+- "You get am available?"
+- "How much e go cost?" (optional — only if vendor wan share am)
+- "When e fit reach the shop?"
+
+**Never ask** — payment, bank details, or loans. This call na for order only.
+
+## Phase 2 — owner status callback
+
+**Opening**
+
+- "I get update for your order."
+
+**Message**
+
+- "I don place the [item] order with [vendor name]. [She/He] say e go reach you around [ETA]."
+- If vendor no dey available: "[Vendor name] no get am now. You want make I try another person?"
+
+**Closing**
+
+- "I don note everything. Thank you."
+
+## Phase 2 — new-shop onboarding
+
+**Opening**
+
+- "Good day, I be AI assistant. I go set up your shop account — small question make I ask."
+
+**Collect**
+
+- "Wetin be your shop name, and phone number make I confirm am?"
+- "Which region and language you prefer for calls?"
+- "Tell me 3 to 5 thing wey you dey sell pass."
+- "You get regular supplier make I note?" (optional)
+
+**Consent**
+
+- "You agree make we store this one and call you later for check-in?" — wait for clear yes.
+
+**Returning owner** — if number already dey file: "You still dey [shop name], same number?" instead of full onboarding.
+
 ## Phase 3 — payment consent (after order amount dey clear)
 
 Only after vendor don confirm order + amount. Dis one no be the same "yes" for calling the vendor.

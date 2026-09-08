@@ -48,6 +48,14 @@ When restock workflows are enabled (issues P2–P5):
 5. **No recurring auto-orders** — each restock request is one-shot unless the host scheduler creates a new confirmed job with a cancel path.
 6. Vendor and callback calls are **separate** from inventory/sales check-ins; do not combine them into one CALL-E task.
 
+## Phase 2 — new-shop onboarding (issue P6)
+
+1. **Owner-initiated only** — onboarding runs because the owner asked to sign up or pre-agreed to an intake call. Never a cold outreach call to a number found some other way.
+2. **Two explicit consents** — storing the collected profile, and receiving future check-in calls. Both are separate yes/no answers, not implied by completing the call.
+3. **No inference** — display name, phone, region, locale, and currency are asked for explicitly. Never derive region/locale from a phone number prefix.
+4. **Returning owner** — if a shop already exists for the given phone, offer a short confirm ("still X, same number?") instead of the full intake script.
+5. **Privacy-minimized receipt** — the call receipt records that onboarding happened, not a full transcript of shop finances.
+
 ## Phase 3 — vendor payouts (owner pay-yes → payment adapter)
 
 After a vendor order has a known amount (Phase 2 P4), paying the vendor is a **separate** side effect:

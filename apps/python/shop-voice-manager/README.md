@@ -173,6 +173,26 @@ this project has done.
 | `web/static/` | The console itself: customers, call history, call detail, live status |
 | `tests/` | Pytest suite. No credentials, no network, no calls |
 
+## Phase 2 — procurement (demo)
+
+Low stock → reorder offer → vendor capture → vendor call → owner status
+callback, end to end, no network:
+
+```bash
+pytest tests/test_store_procurement.py -q
+```
+
+The chain in one call: `python client.py --request example_request.json
+--fixture reorder-offer-result.json` previews the reorder-offer call the same
+way inventory/sales do. See `fixtures/procurement/` for the full envelope
+fixtures (schema-checked and disclosure-checked by `validate_fixtures.py`) that
+drive the integration test
+`test_full_procurement_chain_reflects_in_the_final_order`.
+
+New-shop onboarding follows the same pattern — `call_type=onboarding` writes
+straight to `shops`/`products`; a returning owner (same phone) updates the
+existing row instead of creating a second shop.
+
 ## Phase 3 — vendor payouts (demo)
 
 After a confirmed order has an amount, link an offline `payee_ref`, create a
@@ -202,6 +222,7 @@ Individual suites:
 pytest tests/test_live_call.py -q   # the live path, fully stubbed
 pytest tests/test_store_ingest.py -q
 pytest tests/test_summarize.py -q
+pytest tests/test_store_procurement.py -q  # Phase 2 procurement + onboarding
 pytest tests/test_payments.py -q    # Phase 3 payouts
 pytest tests/test_no_live_calls.py -q
 ```
