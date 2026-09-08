@@ -213,3 +213,104 @@ def test_rejected_calls_do_not_shift_the_totals(tmp_path):
     a, b = summarise(clean), summarise(dirty)
     assert a["estimated_revenue"] == b["estimated_revenue"]
     assert a["slow_moving_capital"] == b["slow_moving_capital"]
+
+
+# ---------------------------------------------------------------- Phase 2 vendors (P1) + new goods
+
+
+def test_v1_ledger_upgrades_to_v2(tmp_path):
+    path = tmp_path / "old.db"
+    c = store.connect(path)
+    # Simulate a v1 stamp with only core tables present, then re-init.
+    store.initialize(c)
+    with c:
+        c.execute("UPDATE schema_meta SET value = '1' WHERE key = 'version'")
+        c.execute("DROP TABLE IF EXISTS vendors")
+        c.execute("DROP TABLE IF EXISTS restock_requests")
+        c.execute("DROP TABLE IF EXISTS orders")
+    store.initialize(c)
+    assert store.schema_version(c) == 2
+    store.check_compatible(c)
+    tables = {
+        r["name"]
+        for r in c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert {"vendors", "restock_requests", "orders"} <= tables
+    c.close()
+
+
+def test_upsert_and_find_vendor_by_spoken_name(conn):
+    with conn:
+        vid = store.upsert_vendor(
+            conn,
+            shop_id=SHOP,
+            display_name="Mama Sikiru",
+            goods=["fish"],
+            phone_e164="+2348000000099",
+            now="2026-09-07T10:00:00Z",
+        )
+    row = store.find_vendor_by_name(conn, shop_id=SHOP, name="mama sikiru")
+    assert row is not None
+    assert row["vendor_id"] == vid
+    assert "fish" in json.loads(row["goods_json"])
+    listed = store.list_vendors(conn, shop_id=SHOP)
+    assert listed[0]["phone_masked"].endswith("0099")
+    assert "*" in listed[0]["phone_masked"]
+    assert listed[0]["goods"] == ["fish"]
+
+
+def test_vendor_upsert_does_not_erase_phone_when_omitted(conn):
+    with conn:
+        store.upsert_vendor(
+            conn, shop_id=SHOP, display_name="Rice Man",
+            goods=["rice"], phone_e164="+2348111111111", now="2026-09-07",
+        )
+        store.upsert_vendor(
+            conn, shop_id=SHOP, display_name="Rice Man",
+            goods=["rice", "beans"], phone_e164=None, now="2026-09-08",
+        )
+    row = store.find_vendor_by_name(conn, shop_id=SHOP, name="Rice Man")
+    assert row["phone_e164"] == "+2348111111111"
+    assert json.loads(row["goods_json"]) == ["rice", "beans"]
+
+
+def test_new_goods_mentioned_on_inventory_call_are_added(conn):
+    """Owners can introduce SKUs that were never in the seed profile."""
+    before = {
+        r["name_normalized"]
+        for r in conn.execute(
+            "SELECT name_normalized FROM products WHERE shop_id = ?", (SHOP,)
+        )
+    }
+    assert "fresh fish" not in before
+
+    call = load("calls/2026-08-10-inventory.json")
+    call = copy.deepcopy(call)
+    call["call_id"] = "call-new-goods-fish"
+    call["structured_result"]["products"].append({
+        "name": "Fresh Fish",
+        "quantity_estimate": 2,
+        "unit": "cooler boxes",
+        "running_low": False,
+        "is_new_item": True,
+    })
+    result = ingest.ingest_call(conn, call)
+    assert result.accepted
+
+    row = conn.execute(
+        "SELECT display_name, quantity_estimate, unit FROM products"
+        " WHERE shop_id = ? AND name_normalized = ?",
+        (SHOP, "fresh fish"),
+    ).fetchone()
+    assert row is not None
+    assert row["display_name"] == "Fresh Fish"
+    assert row["quantity_estimate"] == 2
+    assert row["unit"] == "cooler boxes"
+
+
+def test_mask_phone_hides_middle_digits():
+    assert store.mask_phone("+2348000000000").endswith("0000")
+    assert store.mask_phone(None) == ""
+    assert store.mask_phone("12") == "***"

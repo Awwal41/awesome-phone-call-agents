@@ -35,6 +35,10 @@
           "last_purchase_price": {
             "type": "number",
             "description": "Last purchase price in shop currency if stated on the call."
+          },
+          "is_new_item": {
+            "type": "boolean",
+            "description": "True when the owner introduces a product that was not in the prior inventory list. The ledger adds it as a new product row."
           }
         }
       }

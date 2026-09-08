@@ -72,8 +72,10 @@ consent check -> build task + schema -> preview -> live call -> structured resul
 Call the shop owner for a short morning inventory check-in. Use simple English
 with Nigerian Pidgin phrases where natural. Ask about: {{products_to_ask}}.
 For each product, capture approximate quantity and unit. Ask what is running low.
-Disclose you are an AI assistant for their shop manager service. Keep the call
-under {{max_minutes}} minutes. Do not give financial advice.
+Also ask once whether they added any new goods not on that list; if yes, capture
+name, quantity, and unit so the ledger can add them. Disclose you are an AI
+assistant for their shop manager service. Keep the call under {{max_minutes}}
+minutes. Do not give financial advice.
 ```
 
 ## Call task template (sales)
@@ -94,6 +96,8 @@ shopvoice-{shop_id}-inventory-{YYYY-MM-DD}
 shopvoice-{shop_id}-sales-{YYYY-MM-DD}
 ```
 
+Phase 2 keys (when enabled): `vendor_order`, `order_status`, `onboarding` — see `references/safety.md`.
+
 ## Runnable app
 
 The reference runner lives at `apps/python/shop-voice-manager/`. Default mode is preview (no network call). See the app README for live opt-in flags.
@@ -105,7 +109,7 @@ The reference runner lives at `apps/python/shop-voice-manager/`. Default mode is
 
 ## Output
 
-After a completed inventory call, expect fields such as `check_in_completed`, `products[]`, and optional `owner_notes`.
+After a completed inventory call, expect fields such as `check_in_completed`, `products[]` (including **new goods** the owner introduced), and optional `owner_notes`. New product names are upserted into the SQLite ledger automatically.
 
 After a completed sales call, expect `sales_day_completed`, `estimated_revenue`, `top_sellers[]`, and optional procurement fields.
 
@@ -121,4 +125,5 @@ For general scheduler-wrapper guidance across other hosts, see [`call-reminder`]
 
 ## Related project docs
 
-Hackathon plan: `docs/projects/voice-shop-manager/PROJECT_PLAN.md`
+Hackathon plan: `docs/projects/voice-shop-manager/PROJECT_PLAN.md`  
+Phase 2 next steps: `docs/projects/voice-shop-manager/NEXT_STEPS.md`

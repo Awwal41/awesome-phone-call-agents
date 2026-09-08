@@ -21,6 +21,13 @@ Use these phrases in the CALL-E **task text**, not as a rigid script. CALL-E ada
 - "Which thing don finish or almost finish?"
 - "Sugar na how many you still get?"
 - "Cooking oil remain well?"
+- "You get any new thing for the shop wey we never track before? Wetin be the name, and how many you get?"
+
+**New goods (required probe once per morning call)**
+
+- If the owner mentions a product that was not on the ask-list, capture it as a normal inventory line (name, quantity, unit). The ledger **adds** new product names automatically — do not refuse or ignore them.
+- Ask unit and approximate quantity the first time a new good appears.
+- Optional follow-up: "Who you dey buy that one from?" (supplier nickname for later vendor memory).
 
 **Procurement hints**
 
@@ -31,6 +38,7 @@ Use these phrases in the CALL-E **task text**, not as a rigid script. CALL-E ada
 
 - "Thank you. I go note am. I go call you later today make we check sales."
 - "If anything run out, just tell me now make I note am."
+- Do **not** place vendor orders on this call yet unless a separate restock workflow with explicit yes is active (Phase 2).
 
 ## Evening sales recap
 

@@ -12,26 +12,27 @@
 
 > **Demo submission:** Awwal tasks are **Done (demo)** — runnable with fixtures, no live CALL-E call required. Rajput and Aranwa tasks extend the demo into production-ready SDK + SQLite + tests.
 
+> **Phase 2 (next):** Procurement loop — low stock → ask to order → save vendors → call vendors → call owner back with status; plus new-user onboarding into SQLite. See [`NEXT_STEPS.md`](./NEXT_STEPS.md) and issues P1–P8.
+
 ---
 
 ## Progress snapshot
 
-_Last updated: 2026-09-01 on branch `feat/shop-voice-manager` (20 commits ahead of
-`main`, 10 not yet pushed)_
+_Last updated: 2026-09-07 on branch `feat/shop-voice-manager`_
 
 Whole repository is green: `./check.sh` runs repository validation, fixture
-validation (14 call fixtures + 5 edge cases) and **42 tests** with no
-credentials, no network, and no calls.
+validation and tests with no credentials, no network, and no calls.
 
 ### Overall
 
 | Area | Done | Open | Owner(s) |
 | --- | ---: | ---: | --- |
-| Awwal tasks (demo scope) | **10 / 10** | 0 | Awwal |
-| Agent skill | Complete | — | Awwal |
-| Python app | Ledger + ingest (R4, R6), wired end to end | Live SDK path (R5) | Rajput |
-| Insights, tests, docs | **7 / 8** (AR2–AR4, AR6–AR8) | India locale (AR5) | Aranwa |
+| Awwal tasks (demo scope) | **10 / 10** | A9 upstream PR | Awwal |
+| Agent skill | Complete (MVP) | Phase 2 scripts + safety (P2, P5, P8) | Awwal |
+| Python app | Ledger + ingest + live path (R4–R6) | Vendor schema + vendor dial (P1, P4) | Rajput |
+| Insights, tests, docs | **7 / 8** (AR2–AR4, AR6–AR8) | India locale (AR5); P6/P7 | Aranwa |
 | Shared (S1–S4) | **4 / 4** | — | All |
+| Phase 2 procurement (P1–P8) | **2 / 8** (P1, P8) | P2–P7 → Aranwa | Team |
 
 ### Awwal — all tasks complete (demo mode)
 
@@ -78,22 +79,12 @@ python client.py --request example_request.json --weekly-summary
 
 ### Still open
 
-Ordered by value. The first item is small and unblocks an honest demo.
+Ordered by value.
 
-- [x] ~~Rewire `client.py` onto the real pipeline.~~ **Not needed — it already
-      is.** `demo_ledger.build` was rewritten in `2636b0d` to run every fixture
-      through `ingest.ingest_call` into a `store.py` ledger; only the *input* is
-      a fixture rather than a CALL-E result. A stale docstring in `client.py`
-      claimed otherwise and has been corrected. (refs [#13](https://github.com/Awwal41/awesome-phone-call-agents/issues/13))
-- [ ] **R5 — live CALL-E SDK path** ([#15](https://github.com/Awwal41/awesome-phone-call-agents/issues/15)). `--live` still prints a refusal and exits 1.
-      Note the flag drift: `safety.md` specifies `--execute --confirm-recipient-opt-in`,
-      the code has `--live`. Settle on the documented spelling.
-- [ ] **AR5 — India locale** ([#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21)). Not started. Only NG/NGN profiles exist. Mostly
-      content, not code — `summarize.py` already follows the shop's currency.
-- [x] ~~**Doc refresh.**~~ Done — app `README.md` now says 42 tests, documents
-      `store.py` and `ingest.py`, and points at `./check.sh`.
-- [ ] **Push the 10 local commits**, then the manual steps: record video (A4),
-      open upstream PR (A9), submit Devpost (A5).
+- [ ] **Phase 2 procurement loop** ([NEXT_STEPS.md](./NEXT_STEPS.md), issues [#33](https://github.com/Awwal41/awesome-phone-call-agents/issues/33)–[#36](https://github.com/Awwal41/awesome-phone-call-agents/issues/36), [#29](https://github.com/Awwal41/awesome-phone-call-agents/issues/29)–[#32](https://github.com/Awwal41/awesome-phone-call-agents/issues/32)). Low stock → ask to order → save vendors → call vendors → owner status callback; plus new-user onboarding.
+- [ ] **R5 — live CALL-E SDK path** ([#15](https://github.com/Awwal41/awesome-phone-call-agents/issues/15)). Required before live P4/P5 dials.
+- [ ] **AR5 — India locale** ([#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21)). Not started. Only NG/NGN profiles exist.
+- [ ] **A9 — upstream PR** ([#9](https://github.com/Awwal41/awesome-phone-call-agents/issues/9)).
 
 > **Before the upstream PR:** decide whether `docs/projects/voice-shop-manager/`
 > ships with it. This plan, `issue-map.json`, and `DEVPOST_CHECKLIST.md` are team
@@ -264,15 +255,27 @@ A **voice-first AI business manager** for small retailers. For the hackathon, sh
 
 ### MVP scope (2-week hackathon)
 
-| In scope | Out of scope (post-MVP) |
+| In scope | Out of scope (post-MVP / Phase 2+) |
 | --- | --- |
 | Morning inventory check-in call | Multi-supplier price optimization |
-| Evening sales recap call | Embedded lending / payments |
+| Evening sales recap call | Embedded lending / payments / bank APIs |
 | Structured JSON from each call | Full web/mobile app for retailers |
 | SQLite shop ledger per retailer | Thousands of retailers / network effects |
-| Pidgin + English task prompts | Hausa, Yoruba, Igbo, Hindi (architecture-ready) |
+| Pidgin + English task prompts | Hausa, Yoruba, Igbo (architecture-ready) |
 | CLI + preview mode (default) | Production scheduler daemon |
 | Weekly summary text output | Predictive ML models |
+
+### Phase 2 scope (procurement + onboarding)
+
+Tracked in [`NEXT_STEPS.md`](./NEXT_STEPS.md) and issues P1–P8:
+
+| In scope | Still out of scope |
+| --- | --- |
+| Ask owner to restock when items are running low | Auto-order without a spoken yes |
+| Save vendors (name, goods, phone) for reuse | Scraping or cold-calling unknown suppliers |
+| Place one outbound call to a saved vendor | Payments, escrow, or delivery logistics |
+| Call owner back with order status / ETA | Bank account linking or credit decisions |
+| New-user onboarding call → `shops` / products in DB | Multi-tenant SaaS portal |
 
 ### Contribution layout (target paths)
 
@@ -311,18 +314,26 @@ flowchart TB
     subgraph Voice["Voice layer (CALL-E)"]
         A[Morning check-in call]
         B[Evening sales call]
+        V[Vendor restock call]
+        CB[Owner status callback]
+        ON[New-user onboarding call]
     end
 
     subgraph Extract["Structured extraction"]
         C[Inventory schema]
         D[Sales schema]
+        R[Restock + vendor schemas]
+        O[Order + status schemas]
+        P[Shop profile schema]
     end
 
     subgraph Store["Application state (SQLite)"]
         E[Products + quantities]
         F[Daily sales estimates]
-        G[Supplier notes]
+        G[Vendor directory]
         H[Call history receipts]
+        Q[Restock requests + orders]
+        S[Shops profile]
     end
 
     subgraph Insight["Business advisor (local logic)"]
@@ -334,22 +345,29 @@ flowchart TB
     A --> C --> E
     B --> D --> F
     E --> I
+    I -->|ask to order| R
+    R --> G
+    R --> Q
+    G --> V --> O --> Q
+    O --> CB
+    ON --> P --> S
     E --> J
     F --> K
-    G --> E
     A --> H
     B --> H
+    V --> H
+    CB --> H
 ```
 
 ### Five agent functions (vision → phased delivery)
 
 | Agent | MVP | Phase 2 |
 | --- | --- | --- |
-| **Inventory** | Stock counts from morning call | Dead stock, reorder points |
+| **Inventory** | Stock counts from morning call | Dead stock, reorder offer when running low |
 | **Sales** | Daily revenue + top sellers from evening call | Trends, declining SKUs |
-| **Procurement** | Capture supplier + price in conversation | Multi-supplier optimization |
-| **Finance** | Rough gross from buy/sell hints | Margins, working capital |
-| **Business advisor** | Weekly text summary | Predictive alerts |
+| **Procurement** | Capture supplier + price in conversation | Vendor directory, vendor dial, owner status callback |
+| **Finance** | Rough gross from buy/sell hints | Margins, working capital (offline; no bank APIs yet) |
+| **Business advisor** | Weekly text summary | New-user onboarding + reorder coaching |
 
 ---
 
@@ -447,6 +465,24 @@ Estimated gross margin: ₦Z. Products running low: rice, indomie.
 Approximate capital in slow-moving stock: ₦W (items not mentioned as sold in 7 days).
 ```
 
+### Phase 2 — procurement and status loop
+
+Full narrative: [`NEXT_STEPS.md`](./NEXT_STEPS.md).
+
+1. **Reorder offer (P2)** — after inventory flags `running_low`, ask whether to place an order; collect quantities; never dial without a spoken yes.
+2. **Vendor memory (P1, P3)** — save display name, goods sold, and E.164 phone so the owner can later say *"call Mama Sikiru for the fish"*.
+3. **Vendor call (P4)** — one outbound CALL-E call to the vendor with item + amount; preview default; dual consent flags for live.
+4. **Owner callback (P5)** — separate call telling the owner the order status / ETA.
+5. **New-user intake (P6)** — first call collects shop name, phone, region, locale, staples into `shops` / `products`.
+
+Idempotency keys (extend MVP pattern):
+
+```text
+shopvoice-{shop_id}-vendor_order-{request_id}
+shopvoice-{shop_id}-order_status-{request_id}
+shopvoice-{shop_id}-onboarding-{YYYY-MM-DD}
+```
+
 ---
 
 ## Data model (SQLite)
@@ -492,11 +528,13 @@ CREATE TABLE daily_sales (
 CREATE TABLE call_receipts (
   call_id TEXT PRIMARY KEY,
   shop_id TEXT NOT NULL,
-  call_type TEXT NOT NULL,  -- inventory | sales
+  call_type TEXT NOT NULL,  -- inventory | sales | vendor_order | order_status | onboarding
   status TEXT NOT NULL,
   task_completed INTEGER,
   created_at TEXT NOT NULL
 );
+
+-- Phase 2 (see SCHEMA.md + NEXT_STEPS.md): vendors, restock_requests, orders
 ```
 
 ---
@@ -639,6 +677,21 @@ Rajput and Aranwa: ask Awwal to add you as a **collaborator** on `Awwal41/awesom
 | S2 | [#26](https://github.com/Awwal41/awesome-phone-call-agents/issues/26) | Integration test: fixture → SQLite → summary | **Done** — `test_ingest_then_summarize_matches_the_golden_file` |
 | S3 | [#27](https://github.com/Awwal41/awesome-phone-call-agents/issues/27) | Root `README.md` list entries | Done (demo) |
 | S4 | [#28](https://github.com/Awwal41/awesome-phone-call-agents/issues/28) | Demo fixtures (Awwal demo set; Aranwa may extend) | Done (demo) |
+
+### Phase 2 — procurement + onboarding (Todo)
+
+| # | Issue | Task | Status |
+| --- | --- | --- | --- |
+| P1 | [#33](https://github.com/Awwal41/awesome-phone-call-agents/issues/33) | Vendor directory schema in SQLite | **Done** — schema v2 + store helpers |
+| P2 | [#34](https://github.com/Awwal41/awesome-phone-call-agents/issues/34) | Reorder offer after low-stock inventory | Todo — assigned Aranwa |
+| P3 | [#35](https://github.com/Awwal41/awesome-phone-call-agents/issues/35) | Capture and save vendor details | Todo — assigned Aranwa |
+| P4 | [#29](https://github.com/Awwal41/awesome-phone-call-agents/issues/29) | Outbound restock call to vendor | Todo — assigned Aranwa |
+| P5 | [#36](https://github.com/Awwal41/awesome-phone-call-agents/issues/36) | Status callback to shop owner | Todo — assigned Aranwa |
+| P6 | [#30](https://github.com/Awwal41/awesome-phone-call-agents/issues/30) | New-user onboarding → shop profile in DB | Todo — assigned Aranwa |
+| P7 | [#31](https://github.com/Awwal41/awesome-phone-call-agents/issues/31) | Fixtures + integration test for procurement chain | Todo — assigned Aranwa |
+| P8 | [#32](https://github.com/Awwal41/awesome-phone-call-agents/issues/32) | Safety + skill docs for multi-party calls | **Done** |
+
+Narrative + suggested order: [`NEXT_STEPS.md`](./NEXT_STEPS.md).
 
 ---
 

@@ -7,7 +7,7 @@ more often than schema does.
 
     python3 store.py --init shop.db
 
-Schema contract: SCHEMA.md. Refs #14.
+Schema contract: SCHEMA.md. Refs #14, #33 (P1 vendors).
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -57,9 +57,45 @@ CREATE TABLE IF NOT EXISTS call_receipts (
   status TEXT NOT NULL, task_completed INTEGER, confidence REAL,
   accepted INTEGER NOT NULL DEFAULT 0, reason TEXT, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS vendors (
+  vendor_id TEXT PRIMARY KEY,
+  shop_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  name_normalized TEXT NOT NULL,
+  phone_e164 TEXT,
+  goods_json TEXT NOT NULL DEFAULT '[]',
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (shop_id, name_normalized)
+);
+CREATE TABLE IF NOT EXISTS restock_requests (
+  request_id TEXT PRIMARY KEY,
+  shop_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  items_json TEXT NOT NULL,
+  owner_consented INTEGER NOT NULL DEFAULT 0,
+  source_call_id TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS orders (
+  order_id TEXT PRIMARY KEY,
+  request_id TEXT NOT NULL,
+  shop_id TEXT NOT NULL,
+  vendor_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  eta_text TEXT,
+  amount REAL,
+  vendor_call_id TEXT,
+  callback_call_id TEXT,
+  created_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_readings_shop_date ON inventory_readings(shop_id, reading_date);
 CREATE INDEX IF NOT EXISTS idx_sales_shop_date ON daily_sales(shop_id, sales_date);
 CREATE INDEX IF NOT EXISTS idx_receipts_shop ON call_receipts(shop_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_vendors_shop ON vendors(shop_id, name_normalized);
+CREATE INDEX IF NOT EXISTS idx_restock_shop ON restock_requests(shop_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at);
 """
 
 
@@ -86,14 +122,27 @@ def connect(path: Path | str, read_only: bool = False) -> sqlite3.Connection:
 
 
 def initialize(conn: sqlite3.Connection) -> None:
-    """Create the schema if absent. Safe to call on an existing ledger."""
+    """Create the schema if absent. Safe to call on an existing ledger.
+
+    Version 1 ledgers are upgraded in place: Phase 2 tables are added with
+    ``CREATE TABLE IF NOT EXISTS`` and the meta version is bumped to 2.
+    """
     with conn:
         conn.executescript(SCHEMA)
-        conn.execute(
-            "INSERT INTO schema_meta (key, value) VALUES ('version', ?)"
-            " ON CONFLICT(key) DO NOTHING",
-            (str(SCHEMA_VERSION),),
-        )
+        row = conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'version'"
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES ('version', ?)",
+                (str(SCHEMA_VERSION),),
+            )
+        elif int(row["value"]) == 1:
+            # v1 → v2: new tables already created above; only the stamp changes.
+            conn.execute(
+                "UPDATE schema_meta SET value = ? WHERE key = 'version'",
+                (str(SCHEMA_VERSION),),
+            )
 
 
 def schema_version(conn: sqlite3.Connection) -> int:
@@ -103,11 +152,28 @@ def schema_version(conn: sqlite3.Connection) -> int:
 
 def check_compatible(conn: sqlite3.Connection) -> None:
     found = schema_version(conn)
+    if found == 1:
+        initialize(conn)
+        found = schema_version(conn)
     if found != SCHEMA_VERSION:
         raise StoreError(
             f"Ledger is schema version {found}, this code expects {SCHEMA_VERSION}. "
             "Rebuild the ledger or add a migration."
         )
+
+
+def mask_phone(phone: str | None) -> str:
+    """Mask an E.164 number for logs and summaries. Never invent digits."""
+    if not phone:
+        return ""
+    digits = "".join(c for c in phone if c.isdigit())
+    if len(digits) < 4:
+        return "***"
+    return f"+{'*' * (len(digits) - 4)}{digits[-4:]}"
+
+
+def _vendor_id(shop_id: str, name_normalized: str) -> str:
+    return f"vendor-{shop_id}-{name_normalized.replace(' ', '-')}"
 
 
 # ------------------------------------------------------------------ writes
@@ -233,6 +299,77 @@ def clear_shop_day(conn: sqlite3.Connection, shop_id: str, date: str) -> None:
     conn.execute("DELETE FROM procurement_items WHERE shop_id = ? AND purchase_date = ?", (shop_id, date))
 
 
+# ------------------------------------------------------------------ vendors (P1)
+
+
+def upsert_vendor(
+    conn: sqlite3.Connection,
+    *,
+    shop_id: str,
+    display_name: str,
+    goods: list[str] | None = None,
+    phone_e164: str | None = None,
+    notes: str | None = None,
+    now: str,
+) -> str:
+    """Create or update a vendor for a shop. Returns ``vendor_id``.
+
+    Phone may be null until the owner provides E.164 — never invent one.
+    Lookup key is ``(shop_id, normalized display name)``.
+    """
+    key = normalize(display_name)
+    if not key:
+        raise StoreError("vendor display_name is required")
+    vendor_id = _vendor_id(shop_id, key)
+    goods_json = json.dumps(list(goods or []), ensure_ascii=False)
+    conn.execute(
+        "INSERT INTO vendors"
+        " (vendor_id, shop_id, display_name, name_normalized, phone_e164,"
+        "  goods_json, notes, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT(shop_id, name_normalized) DO UPDATE SET"
+        "   display_name = excluded.display_name,"
+        "   phone_e164 = COALESCE(excluded.phone_e164, vendors.phone_e164),"
+        "   goods_json = CASE"
+        "     WHEN excluded.goods_json = '[]' THEN vendors.goods_json"
+        "     ELSE excluded.goods_json END,"
+        "   notes = COALESCE(excluded.notes, vendors.notes),"
+        "   updated_at = excluded.updated_at",
+        (vendor_id, shop_id, display_name.strip(), key, phone_e164,
+         goods_json, notes, now, now),
+    )
+    row = conn.execute(
+        "SELECT vendor_id FROM vendors WHERE shop_id = ? AND name_normalized = ?",
+        (shop_id, key),
+    ).fetchone()
+    return row["vendor_id"]
+
+
+def find_vendor_by_name(
+    conn: sqlite3.Connection, *, shop_id: str, name: str
+) -> sqlite3.Row | None:
+    """Lookup a saved vendor by spoken name (normalized)."""
+    return conn.execute(
+        "SELECT * FROM vendors WHERE shop_id = ? AND name_normalized = ?",
+        (shop_id, normalize(name)),
+    ).fetchone()
+
+
+def list_vendors(conn: sqlite3.Connection, *, shop_id: str) -> list[dict]:
+    """Return vendors for a shop with phones masked for safe display."""
+    rows = conn.execute(
+        "SELECT * FROM vendors WHERE shop_id = ? ORDER BY display_name",
+        (shop_id,),
+    ).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["phone_masked"] = mask_phone(item.get("phone_e164"))
+        item["goods"] = json.loads(item.get("goods_json") or "[]")
+        out.append(item)
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Create or inspect the SQLite ledger")
     parser.add_argument("--init", type=Path, metavar="DB", help="Create the schema at this path")
@@ -254,7 +391,8 @@ def main() -> int:
             return 1
         print(f"schema v{schema_version(conn)}")
         for table in ("shops", "products", "inventory_readings", "daily_sales",
-                      "procurement_items", "call_receipts"):
+                      "procurement_items", "call_receipts", "vendors",
+                      "restock_requests", "orders"):
             n = conn.execute(f"SELECT COUNT(*) c FROM {table}").fetchone()["c"]
             print(f"  {table:<20} {n}")
         conn.close()

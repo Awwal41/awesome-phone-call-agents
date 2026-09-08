@@ -90,6 +90,62 @@ CREATE TABLE call_receipts (
 `call_receipts.confidence` is added so a rejected low-confidence call still
 leaves an audit trail explaining why nothing was written.
 
+## Phase 2 tables (P1 landed — vendors / restock_requests / orders)
+
+Schema version **2**. `store.py` creates these tables and upgrades v1 ledgers in
+place. CRUD for vendors is implemented (`upsert_vendor`, `find_vendor_by_name`,
+`list_vendors` with masked phones). Restock request and order **write helpers**
+for live dials remain Phase 2 follow-ups (P2–P5).
+
+```sql
+CREATE TABLE vendors (
+  vendor_id       TEXT PRIMARY KEY,
+  shop_id         TEXT NOT NULL,
+  display_name    TEXT NOT NULL,
+  name_normalized TEXT NOT NULL,
+  phone_e164      TEXT,              -- null until owner provides E.164
+  goods_json      TEXT NOT NULL,     -- e.g. ["fish","crayfish"]
+  notes           TEXT,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  UNIQUE (shop_id, name_normalized)
+);
+
+CREATE TABLE restock_requests (
+  request_id      TEXT PRIMARY KEY,
+  shop_id         TEXT NOT NULL,
+  status          TEXT NOT NULL,     -- draft | confirmed | ordered | callback_done | cancelled
+  items_json      TEXT NOT NULL,     -- [{name, quantity, unit, vendor_id?}]
+  owner_consented INTEGER NOT NULL, -- must be 1 before vendor dial
+  source_call_id  TEXT,
+  created_at      TEXT NOT NULL
+);
+
+CREATE TABLE orders (
+  order_id           TEXT PRIMARY KEY,
+  request_id         TEXT NOT NULL,
+  shop_id            TEXT NOT NULL,
+  vendor_id          TEXT NOT NULL,
+  status             TEXT NOT NULL,  -- placed | unavailable | failed | unknown
+  eta_text           TEXT,
+  amount             REAL,
+  vendor_call_id     TEXT,
+  callback_call_id   TEXT,
+  created_at         TEXT NOT NULL
+);
+```
+
+### New goods (already supported on inventory ingest)
+
+Any product name in an inventory `structured_result.products[]` that is not
+already in `products` is **inserted** via `write_inventory_reading` (upsert by
+`name_normalized`). Owners do not need a pre-registered catalog. Optional
+`is_new_item: true` on the result schema flags this for agents; the store does
+not require the flag.
+
+Onboarding (P6) writes the existing `shops` and `products` tables; it does not
+need a separate profile table.
+
 ## Ingest rules that the summary depends on
 
 1. **Write a receipt for every call**, including failures. The receipt is the

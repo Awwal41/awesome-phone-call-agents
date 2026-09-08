@@ -20,6 +20,13 @@ Use when the shop owner prefers standard English, or for India pilots (`region: 
 - "What is running low or almost finished?"
 - "How much sugar is left?"
 - "Do you still have enough cooking oil?"
+- "Did you add any new goods we have not tracked before? What are they called, and roughly how many do you have?"
+
+**New goods (probe once per morning call)**
+
+- If the owner names a product that was not on the ask-list, capture it as a normal inventory line (name, quantity, unit). The ledger **adds** new product names automatically — do not refuse or ignore them.
+- Ask unit and approximate quantity the first time a new good appears.
+- Optional: "Who do you usually buy that from?" (for later vendor memory).
 
 **Procurement hints**
 
@@ -29,6 +36,7 @@ Use when the shop owner prefers standard English, or for India pilots (`region: 
 **Closing**
 
 - "Thank you. I'll note this and call later to check today's sales."
+- Do **not** place vendor orders on this call yet unless a separate restock workflow with explicit yes is active (Phase 2).
 
 ## Evening sales recap
 

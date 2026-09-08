@@ -39,7 +39,9 @@ def build_task(request: dict) -> str:
         return (
             f"Call the consenting shop owner for a short morning inventory check-in at {shop}. "
             f"Use {tone}. Ask about: {products}. Capture approximate quantities and units. "
-            f"Ask what is running low. Disclose you are an AI shop manager assistant. "
+            f"Ask what is running low. Ask once about any new goods not on that list and "
+            f"capture name, quantity, and unit if they mention any. "
+            f"Disclose you are an AI shop manager assistant. "
             f"Keep under {minutes} minutes. Do not give financial advice."
         )
     return (
