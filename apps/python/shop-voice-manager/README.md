@@ -106,6 +106,21 @@ have to pass first.
 `http.server` is fine for one operator on localhost. It is not hardened for the
 public internet, so do not bind it to `0.0.0.0` on a shared network.
 
+## Calls placed
+
+`.call-state/` is local and never committed: each checkpoint carries a masked
+phone number and a hash derived from the API key. The call ids themselves are
+evidence worth keeping, so they are published separately.
+
+```bash
+python3 calls_placed.py            # print
+python3 calls_placed.py --write    # update CALLS.md, then commit it
+```
+
+Only calls CALL-E actually created are listed. A checkpoint that never got a
+call id means no call was placed, and saying otherwise would overstate what
+this project has done.
+
 ## Side effects
 
 | Mode | Network | Phone call | Credits |
