@@ -191,6 +191,40 @@ def duration_of(payload: dict) -> int | None:
     return None
 
 
+def checkpoint_stats(shop_ids: list[str]) -> dict[str, dict]:
+    """Attempt counts per shop, read once from the checkpoints.
+
+    A shop id can contain dashes, so the key is matched against the known ids
+    rather than parsed, longest first: "alpha-mall" must not swallow a key
+    belonging to "alpha-mall-annex".
+    """
+    provider_hash = live_call.provider_account_hash(
+        os.environ.get("CALLE_API_KEY") or "demo")
+    folder = live_call.STATE_DIR / provider_hash
+    stats = {sid: {"placed": 0, "failed": 0, "last": None} for sid in shop_ids}
+    if not folder.is_dir():
+        return stats
+    ordered = sorted(shop_ids, key=len, reverse=True)
+    for path in folder.glob("*.json"):
+        try:
+            cp = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        key = cp.get("idempotency_key") or ""
+        sid = next((s for s in ordered if key.startswith(f"shopvoice-{s}-")), None)
+        if sid is None:
+            continue
+        bucket = stats[sid]
+        if cp.get("call_id"):
+            bucket["placed"] += 1
+        else:
+            bucket["failed"] += 1
+        when = cp.get("updated_at")
+        if when and (bucket["last"] is None or when > bucket["last"]):
+            bucket["last"] = when
+    return stats
+
+
 def customers() -> list[dict]:
     conn = _conn()
     try:
@@ -198,10 +232,14 @@ def customers() -> list[dict]:
         counts = {r["shop_id"]: r for r in _rows(conn,
             "SELECT shop_id, COUNT(*) AS calls, MAX(created_at) AS last_call"
             " FROM call_receipts GROUP BY shop_id")}
+        attempts = checkpoint_stats([s["id"] for s in shops])
         for shop in shops:
             stat = counts.get(shop["id"], {})
+            tried = attempts.get(shop["id"], {})
             shop["calls"] = stat.get("calls", 0)
-            shop["last_call"] = stat.get("last_call")
+            # attempts that never became a ledger row still happened
+            shop["failed"] = tried.get("failed", 0)
+            shop["last_call"] = stat.get("last_call") or tried.get("last")
             shop["products"] = [r["display_name"] for r in _rows(conn,
                 "SELECT display_name FROM products WHERE shop_id = ? ORDER BY display_name",
                 (shop["id"],))]

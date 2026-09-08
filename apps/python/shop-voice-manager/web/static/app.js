@@ -111,9 +111,13 @@ async function pageCustomers(){
     + '<span class="row-sub">' + mask(c.phone_e164) + " &middot; " + esc(c.region)
     + " &middot; " + esc(c.currency) + "</span></div>"
     + '<div class="row-end">'
-    + '<span class="chip ' + (c.calls ? "ok" : "idle") + '">' + (c.calls ? "Active" : "No calls yet") + "</span>"
+    + '<span class="chip ' + (c.calls ? "ok" : c.failed ? "low" : "idle") + '">'
+      + (c.calls ? "Active" : c.failed ? "None placed" : "No calls yet") + "</span>"
     + '<div class="row-stat"><span class="v num">' + c.calls + '</span><span class="k">Calls</span></div>'
-    + '<div class="row-stat"><span class="v">' + niceDate(c.last_call) + '</span><span class="k">Last call</span></div>'
+    + (c.failed ? '<div class="row-stat"><span class="v num" style="color:var(--attn)">'
+        + c.failed + '</span><span class="k">Not placed</span></div>' : "")
+    + '<div class="row-stat"><span class="v">' + niceDate(c.last_call)
+      + '</span><span class="k">' + (c.calls ? "Last call" : "Last tried") + "</span></div>"
     + CHEV + "</div></div>").join("");
 
   return modeBanner()
