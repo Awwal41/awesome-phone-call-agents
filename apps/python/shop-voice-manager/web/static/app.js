@@ -59,11 +59,19 @@ function money(n, cur){
 }
 
 async function api(path, options){
-  const res = await fetch("/api" + path, Object.assign({
-    headers:{"Content-Type":"application/json"}
-  }, options || {}));
-  const body = await res.json().catch(() => ({error:"Server sent a non-JSON reply."}));
-  if(!res.ok) throw new Error(body.error || ("Request failed with " + res.status));
+  let res;
+  try{
+    res = await fetch("/api" + path, Object.assign({
+      headers:{"Content-Type":"application/json"}
+    }, options || {}));
+  }catch(e){
+    // fetch only rejects when the request never reached a server, so this is
+    // always "nothing is listening", never an application error. Say that,
+    // rather than passing the browser's "Failed to fetch" through.
+    throw new Error("Cannot reach the console server. Is it still running?");
+  }
+  const body = await res.json().catch(() => ({error:"The server sent a reply this page could not read."}));
+  if(!res.ok) throw new Error(body.error || ("The server refused that request (" + res.status + ")."));
   return body;
 }
 
