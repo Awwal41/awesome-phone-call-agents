@@ -68,6 +68,44 @@ The result is handed to the same `ingest.ingest_call` the fixtures go through,
 so a live call faces the identical confidence gate. See
 `skills/shop-voice-checkin/references/safety.md`.
 
+## Web console
+
+A browser console over the same ledger: customers, per-shop call history, call
+detail with transcript, and live status while a call runs. Standard library
+only, so it adds no dependency and `dependencies = []` still holds.
+
+```bash
+cd ~/Documents/Aranwaolu/Awwal/work/apps/python/shop-voice-manager
+export CALLE_API_KEY=...      # only if you want it to dial
+python3 web/server.py         # http://127.0.0.1:8765
+```
+
+Without a key it starts read only and says so in a banner, so you can browse
+history without any risk of dialling. `SHOPVOICE_DEMO=1` replays a stored call
+instead of placing one, which is enough to rehearse the flow without spending
+credits.
+
+Everything is configuration, not code. Shops, phone numbers, products and
+currency live in the `shops` and `products` tables and are created through the
+UI, never hardcoded.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CALLE_API_KEY` | unset | Required to place a call. Server side only, never sent to the browser |
+| `SHOPVOICE_DB` | `./shop.db` | Ledger path |
+| `SHOPVOICE_HOST` | `127.0.0.1` | Bind address |
+| `SHOPVOICE_PORT` | `8765` | Port |
+| `SHOPVOICE_DEMO` | unset | `1` replays a stored call instead of dialling |
+| `SHOPVOICE_REGIONS` | `US,GB,CA,KE,...` | Regions offered in the UI |
+| `SHOPVOICE_BLOCKED_REGIONS` | `NG` | Refused before dialling, because CALL-E rejects them at creation |
+
+Pressing **Start check-in** with a key set places a real call and spends a
+credit, exactly like `--execute` does. The consent box and the region gate both
+have to pass first.
+
+`http.server` is fine for one operator on localhost. It is not hardened for the
+public internet, so do not bind it to `0.0.0.0` on a shared network.
+
 ## Side effects
 
 | Mode | Network | Phone call | Credits |
@@ -75,6 +113,9 @@ so a live call faces the identical confidence gate. See
 | Default / `--fixture` / `--weekly-summary` | No | No | 0 |
 | `pytest` | No | No | 0 |
 | `--execute --confirm-recipient-opt-in` | Yes | **Yes** | 1 per call |
+| `web/server.py` browsing | No | No | 0 |
+| `web/server.py` with `SHOPVOICE_DEMO=1` | No | No | 0 |
+| Console **Start check-in** with a key set | Yes | **Yes** | 1 per call |
 
 ## Files
 
@@ -91,6 +132,8 @@ so a live call faces the identical confidence gate. See
 | `live_call.py` | The live CALL-E path (R5): trusted-host check, consent check, crash-safe checkpoints, result normalisation |
 | `payments/` | Phase 3 fake payment adapter — preview by default, no bank network |
 | `SCHEMA.md` | The ledger contract both sides build against |
+| `web/server.py` | HTTP API and static host for the console. Standard library only; imports the modules above without modifying them |
+| `web/static/` | The console itself: customers, call history, call detail, live status |
 | `tests/` | Pytest suite. No credentials, no network, no calls |
 
 ## Phase 3 — vendor payouts (demo)
