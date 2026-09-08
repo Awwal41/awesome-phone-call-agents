@@ -24,32 +24,92 @@ def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+SCHEMA_FILES = {
+    "inventory": "result-schema-inventory.json",
+    "sales": "result-schema-sales.json",
+    "reorder_offer": "result-schema-reorder-offer.json",
+    "vendor_order": "result-schema-vendor-order.json",
+    "order_status": "result-schema-order-status.json",
+    "onboarding": "result-schema-onboarding.json",
+}
+
+# Phase 2 calls that dial a *request* (a vendor call, or its owner callback)
+# key on request_id/order_id rather than the calendar date, per safety.md.
+REQUEST_KEYED_CALL_TYPES = {"vendor_order", "order_status"}
+
+
 def schema_path(call_type: str) -> Path:
-    name = "result-schema-inventory.json" if call_type == "inventory" else "result-schema-sales.json"
+    name = SCHEMA_FILES.get(call_type)
+    if name is None:
+        raise SystemExit(f"Unknown call_type: {call_type!r}")
     return SKILL / "references" / name
 
 
 def build_task(request: dict) -> str:
     shop = request.get("shop_id", "the shop")
-    products = ", ".join(request.get("products_to_ask", ["stock items"]))
     style = request.get("language_style", "english")
+    tone = "Pidgin-influenced English" if style == "pidgin-english" else "plain English"
     minutes = request.get("max_minutes", 4)
-    if request["call_type"] == "inventory":
-        tone = "Pidgin-influenced English" if style == "pidgin-english" else "plain English"
+    disclose = "Disclose you are an AI shop manager assistant."
+    call_type = request["call_type"]
+
+    if call_type == "inventory":
+        products = ", ".join(request.get("products_to_ask", ["stock items"]))
         return (
             f"Call the consenting shop owner for a short morning inventory check-in at {shop}. "
             f"Use {tone}. Ask about: {products}. Capture approximate quantities and units. "
             f"Ask what is running low. Ask once about any new goods not on that list and "
             f"capture name, quantity, and unit if they mention any. "
-            f"Disclose you are an AI shop manager assistant. "
-            f"Keep under {minutes} minutes. Do not give financial advice."
+            f"{disclose} Keep under {minutes} minutes. Do not give financial advice."
         )
-    return (
-        f"Call the consenting shop owner for a short evening sales recap at {shop}. "
-        f"Ask roughly how much they sold today, top sellers, and any restock purchases. "
-        f"Disclose you are an AI shop manager assistant. Keep under {minutes} minutes. "
-        f"Do not give financial advice."
-    )
+    if call_type == "sales":
+        return (
+            f"Call the consenting shop owner for a short evening sales recap at {shop}. "
+            f"Ask roughly how much they sold today, top sellers, and any restock purchases. "
+            f"{disclose} Keep under {minutes} minutes. Do not give financial advice."
+        )
+    if call_type == "reorder_offer":
+        items = ", ".join(request.get("low_stock_items", ["the items running low"]))
+        return (
+            f"Call the consenting shop owner at {shop}. Use {tone}. Tell them {items} are "
+            f"running low and ask if they want to place a restock order. If yes, ask quantity "
+            f"needed per item and which vendor to use — name, what the vendor sells, and phone "
+            f"number if known (reuse a saved vendor if they name one already on file). If no, "
+            f"end politely; do not place any vendor call. Never invent a vendor phone number. "
+            f"{disclose} Keep under {minutes} minutes. Do not give financial advice or discuss loans."
+        )
+    if call_type == "vendor_order":
+        items = ", ".join(request.get("order_items", ["the requested items"]))
+        vendor = request.get("vendor_display_name", "the vendor")
+        return (
+            f"Call {vendor} on behalf of {shop}. {disclose} State you are calling to place an "
+            f"order for: {items}. Ask if they are available, the price if they wish to share "
+            f"it, and an estimated delivery time. Do not discuss payment, bank details, or loans."
+        )
+    if call_type == "order_status":
+        return (
+            f"Call the consenting shop owner at {shop} with a short update on their restock "
+            f"order. {disclose} State whether the order was placed, with the vendor's quoted "
+            f"ETA and amount if known. Keep under 2 minutes. Do not give financial advice."
+        )
+    if call_type == "onboarding":
+        return (
+            f"Call the consenting new shop owner. {disclose} Explain you will collect basic "
+            f"shop details to set up their account: shop name, phone number (read back to "
+            f"confirm), region, and language. Ask for 3 to 5 staple products they sell and, "
+            f"optionally, one preferred supplier's name. Ask for consent to store this "
+            f"information and to make future check-in calls. Do not infer region, locale, or "
+            f"currency — ask explicitly. Keep under {minutes} minutes."
+        )
+    raise SystemExit(f"Unknown call_type: {call_type!r}")
+
+
+def _idempotency_key(request: dict) -> str:
+    shop_id, call_type = request["shop_id"], request["call_type"]
+    if call_type in REQUEST_KEYED_CALL_TYPES:
+        request_id = request.get("request_id") or request.get("order_id") or "DEMO"
+        return f"shopvoice-{shop_id}-{call_type}-{request_id}"
+    return f"shopvoice-{shop_id}-{call_type}-DEMO"
 
 
 def preview(request: dict) -> dict:
@@ -62,9 +122,7 @@ def preview(request: dict) -> dict:
         "call_type": request["call_type"],
         "task": build_task(request),
         "result_schema": load_json(schema_path(request["call_type"])),
-        "idempotency_key": (
-            f"shopvoice-{request['shop_id']}-{request['call_type']}-DEMO"
-        ),
+        "idempotency_key": _idempotency_key(request),
     }
 
 
@@ -98,15 +156,21 @@ def demo_summary(shop_id: str, method: str = "turnover") -> str:
     )
 
 
+DEFAULT_FIXTURES = {
+    "inventory": "inventory-result.json",
+    "sales": "sales-result.json",
+    "reorder_offer": "reorder-offer-result.json",
+    "vendor_order": "vendor-order-result.json",
+    "order_status": "order-status-result.json",
+    "onboarding": "onboarding-result.json",
+}
+
+
 def run_demo(request: dict, fixture_name: str | None) -> dict:
     if fixture_name:
         fixture = FIXTURES / fixture_name
     else:
-        fixture = (
-            FIXTURES / "inventory-result.json"
-            if request["call_type"] == "inventory"
-            else FIXTURES / "sales-result.json"
-        )
+        fixture = FIXTURES / DEFAULT_FIXTURES[request["call_type"]]
     if not fixture.is_file():
         raise SystemExit(f"Missing fixture: {fixture}")
     return {

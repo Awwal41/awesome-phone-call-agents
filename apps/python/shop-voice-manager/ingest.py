@@ -109,6 +109,64 @@ def ingest_call(conn: sqlite3.Connection, call: dict, *,
                     conn, shop_id=shop_id, purchase_date=call_date,
                     items=result.get("procurement_items", []) or [],
                     source_call_id=call_id)
+            elif call_type == "reorder_offer":
+                items = result.get("items", []) or []
+                store.create_restock_request(
+                    conn, shop_id=shop_id, items=items,
+                    owner_consented=bool(result.get("owner_wants_to_order")),
+                    source_call_id=call_id, now=started)
+                rows += 1
+                if result.get("owner_wants_to_order"):
+                    for item in items:
+                        if isinstance(item, dict) and item.get("vendor_name"):
+                            store.upsert_vendor(
+                                conn, shop_id=shop_id, display_name=item["vendor_name"],
+                                goods=item.get("vendor_goods"),
+                                phone_e164=item.get("vendor_phone_e164"), now=started)
+                            rows += 1
+            elif call_type == "vendor_order":
+                order_id = meta.get("order_id")
+                if order_id and store.record_vendor_call(
+                    conn, order_id=order_id, vendor_call_id=call_id,
+                    available=bool(result.get("available")),
+                    amount=result.get("quoted_amount"), eta_text=result.get("eta_text"),
+                ):
+                    rows = 1
+                else:
+                    accepted, reason = False, f"unknown order_id {order_id!r}"
+                    rows = 0
+            elif call_type == "order_status":
+                order_id = result.get("order_id") or meta.get("order_id")
+                if order_id and store.record_order_status(
+                    conn, order_id=order_id, callback_call_id=call_id,
+                    status=result.get("status_reported"), eta_text=result.get("eta_text"),
+                ):
+                    rows = 1
+                else:
+                    accepted, reason = False, f"unknown order_id {order_id!r}"
+                    rows = 0
+            elif call_type == "onboarding":
+                profile = {
+                    "shop_id": shop_id,
+                    "display_name": result.get("display_name"),
+                    "phone": result.get("phone"),
+                    "region": result.get("region"),
+                    "locale": result.get("locale"),
+                    "currency": result.get("currency", "NGN"),
+                    "language_style": result.get("language_style"),
+                    "consent_source": "voice_onboarding_call",
+                    "timezone": result.get("timezone"),
+                    "consent_timestamp": started,
+                }
+                store.upsert_shop(conn, profile)
+                rows += 1
+                products = result.get("typical_products", []) or []
+                store.seed_products(conn, {"shop_id": shop_id, "typical_products": products})
+                rows += len(products)
+                supplier = result.get("preferred_supplier_nickname")
+                if supplier:
+                    store.upsert_vendor(conn, shop_id=shop_id, display_name=supplier, now=started)
+                    rows += 1
             else:
                 accepted, reason = False, f"unknown call_type {call_type!r}"
                 rows = 0
