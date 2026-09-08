@@ -173,6 +173,15 @@ def _ensure_shop_language_column(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE shops ADD COLUMN language_style TEXT")
 
 
+def _ensure_shop_onboarding_columns(conn: sqlite3.Connection) -> None:
+    """Add onboarding consent/timezone fields without rebuilding the shops table."""
+    cols = _table_columns(conn, "shops")
+    if "consent_source" not in cols:
+        conn.execute("ALTER TABLE shops ADD COLUMN consent_source TEXT")
+    if "timezone" not in cols:
+        conn.execute("ALTER TABLE shops ADD COLUMN timezone TEXT")
+
+
 def initialize(conn: sqlite3.Connection) -> None:
     """Create the schema if absent. Safe to call on an existing ledger.
 
@@ -184,6 +193,7 @@ def initialize(conn: sqlite3.Connection) -> None:
         conn.executescript(SCHEMA)
         _ensure_vendor_payee_columns(conn)
         _ensure_shop_language_column(conn)
+        _ensure_shop_onboarding_columns(conn)
         row = conn.execute(
             "SELECT value FROM schema_meta WHERE key = 'version'"
         ).fetchone()
@@ -245,13 +255,15 @@ def _vendor_id(shop_id: str, name_normalized: str) -> str:
 def upsert_shop(conn: sqlite3.Connection, profile: dict) -> None:
     conn.execute(
         "INSERT INTO shops (id, display_name, phone_e164, region, locale, currency,"
-        " language_style, created_at)"
+        " language_style, consent_source, timezone, created_at)"
         " VALUES (:id, :display_name, :phone, :region, :locale, :currency,"
-        " :language_style, :created_at)"
+        " :language_style, :consent_source, :timezone, :created_at)"
         " ON CONFLICT(id) DO UPDATE SET"
         "   display_name = excluded.display_name, phone_e164 = excluded.phone_e164,"
         "   region = excluded.region, locale = excluded.locale, currency = excluded.currency,"
-        "   language_style = COALESCE(excluded.language_style, shops.language_style)",
+        "   language_style = COALESCE(excluded.language_style, shops.language_style),"
+        "   consent_source = COALESCE(excluded.consent_source, shops.consent_source),"
+        "   timezone = COALESCE(excluded.timezone, shops.timezone)",
         {
             "id": profile["shop_id"],
             "display_name": profile.get("display_name"),
@@ -260,9 +272,18 @@ def upsert_shop(conn: sqlite3.Connection, profile: dict) -> None:
             "locale": profile["locale"],
             "currency": profile.get("currency", "NGN"),
             "language_style": profile.get("language_style"),
+            "consent_source": profile.get("consent_source"),
+            "timezone": profile.get("timezone"),
             "created_at": profile.get("consent_timestamp", ""),
         },
     )
+
+
+def find_shop_by_phone(conn: sqlite3.Connection, phone_e164: str) -> sqlite3.Row | None:
+    """Lookup an existing shop by phone, so onboarding can skip repeat owners."""
+    return conn.execute(
+        "SELECT * FROM shops WHERE phone_e164 = ?", (phone_e164,)
+    ).fetchone()
 
 
 def seed_products(conn: sqlite3.Connection, profile: dict) -> None:
@@ -437,6 +458,109 @@ def list_vendors(conn: sqlite3.Connection, *, shop_id: str) -> list[dict]:
         item["goods"] = json.loads(item.get("goods_json") or "[]")
         out.append(item)
     return out
+
+
+# ------------------------------------------------------------------ procurement (P2-P5)
+
+
+def create_restock_request(
+    conn: sqlite3.Connection,
+    *,
+    shop_id: str,
+    items: list[dict],
+    owner_consented: bool,
+    source_call_id: str,
+    now: str,
+) -> str:
+    """Record the owner's reorder decision from a reorder-offer call.
+
+    ``request_id`` is derived from ``source_call_id``, not random, so
+    re-ingesting the same call cannot create a second draft.
+    """
+    request_id = f"restock-{source_call_id}"
+    conn.execute(
+        "INSERT INTO restock_requests"
+        " (request_id, shop_id, status, items_json, owner_consented, source_call_id, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT(request_id) DO NOTHING",
+        (request_id, shop_id, "confirmed" if owner_consented else "declined",
+         json.dumps(items, ensure_ascii=False), 1 if owner_consented else 0,
+         source_call_id, now),
+    )
+    return request_id
+
+
+def get_restock_request(conn: sqlite3.Connection, *, request_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM restock_requests WHERE request_id = ?", (request_id,)
+    ).fetchone()
+
+
+def create_order(
+    conn: sqlite3.Connection,
+    *,
+    request_id: str,
+    shop_id: str,
+    vendor_id: str,
+    now: str,
+) -> str:
+    """Create (or reuse) the order for one vendor within a restock request.
+
+    ``order_id`` is derived from ``(request_id, vendor_id)`` so a retried
+    vendor dial for the same request cannot create a second order row.
+    """
+    order_id = f"order-{request_id}-{vendor_id}"
+    conn.execute(
+        "INSERT INTO orders (order_id, request_id, shop_id, vendor_id, status, created_at)"
+        " VALUES (?, ?, ?, ?, 'pending_call', ?)"
+        " ON CONFLICT(order_id) DO NOTHING",
+        (order_id, request_id, shop_id, vendor_id, now),
+    )
+    return order_id
+
+
+def get_order(conn: sqlite3.Connection, *, order_id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM orders WHERE order_id = ?", (order_id,)).fetchone()
+
+
+def record_vendor_call(
+    conn: sqlite3.Connection,
+    *,
+    order_id: str,
+    vendor_call_id: str,
+    available: bool,
+    amount: float | None = None,
+    eta_text: str | None = None,
+) -> bool:
+    """Update an order with the vendor call outcome. False if ``order_id`` is unknown."""
+    if get_order(conn, order_id=order_id) is None:
+        return False
+    conn.execute(
+        "UPDATE orders SET status = ?, amount = COALESCE(?, amount),"
+        " eta_text = COALESCE(?, eta_text), vendor_call_id = ?"
+        " WHERE order_id = ?",
+        ("placed" if available else "unavailable", amount, eta_text, vendor_call_id, order_id),
+    )
+    return True
+
+
+def record_order_status(
+    conn: sqlite3.Connection,
+    *,
+    order_id: str,
+    callback_call_id: str,
+    status: str,
+    eta_text: str | None = None,
+) -> bool:
+    """Record the owner-facing status callback. False if ``order_id`` is unknown."""
+    if get_order(conn, order_id=order_id) is None:
+        return False
+    conn.execute(
+        "UPDATE orders SET status = ?, eta_text = COALESCE(?, eta_text), callback_call_id = ?"
+        " WHERE order_id = ?",
+        (status, eta_text, callback_call_id, order_id),
+    )
+    return True
 
 
 # ------------------------------------------------------------------ payments (P9)
