@@ -37,10 +37,15 @@ SCHEMA_DIR = REPO_ROOT / "skills" / "shop-voice-checkin" / "references"
 SCHEMAS = {
     "inventory": SCHEMA_DIR / "result-schema-inventory.json",
     "sales": SCHEMA_DIR / "result-schema-sales.json",
+    "reorder_offer": SCHEMA_DIR / "result-schema-reorder-offer.json",
+    "vendor_order": SCHEMA_DIR / "result-schema-vendor-order.json",
+    "order_status": SCHEMA_DIR / "result-schema-order-status.json",
+    "onboarding": SCHEMA_DIR / "result-schema-onboarding.json",
 }
 
 # Reserved / fictional numbers only. Nothing dialable may enter git.
-ALLOWED_PHONES = {"+2348000000000", "+919000000000"}
+# +2348111111111 is the fictional vendor number used by the procurement fixtures.
+ALLOWED_PHONES = {"+2348000000000", "+919000000000", "+2348111111111"}
 
 KNOWN_STATUSES = {
     "completed", "failed", "no_answer", "declined",
@@ -52,7 +57,15 @@ DISCLOSURE_MARKERS = (
     "i be ai",
 )
 
-IDEMPOTENCY_RE = re.compile(r"^shopvoice-[a-z0-9-]+-(inventory|sales)-\d{4}-\d{2}-\d{2}$")
+# Most call types dial once per calendar day. `vendor_order`/`order_status`
+# instead key on the restock request they belong to (see safety.md's
+# idempotency table), since a shop can restock more than once a day.
+IDEMPOTENCY_DATE_RE = re.compile(
+    r"^shopvoice-[a-z0-9-]+-(inventory|sales|reorder_offer|onboarding)-\d{4}-\d{2}-\d{2}$"
+)
+IDEMPOTENCY_REQUEST_RE = re.compile(
+    r"^shopvoice-[a-z0-9-]+-(vendor_order|order_status)-[a-z0-9-]+$"
+)
 PHONE_RE = re.compile(r"\+\d[\d\s-]{6,}\d")
 
 errors: list[str] = []
@@ -161,7 +174,9 @@ def check_envelope(doc: dict, where: str, seen_keys: dict[str, str]) -> None:
         fail(where, f"completion_confidence.score out of range: {score!r}")
 
     key = doc.get("idempotency_key", "")
-    if not IDEMPOTENCY_RE.match(key):
+    call_type = doc.get("metadata", {}).get("call_type")
+    pattern = IDEMPOTENCY_REQUEST_RE if call_type in ("vendor_order", "order_status") else IDEMPOTENCY_DATE_RE
+    if not pattern.match(key):
         fail(where, f"idempotency_key does not match documented format: {key!r}")
     if key in seen_keys:
         fail(where, f"duplicate idempotency_key, also used by {seen_keys[key]}")
@@ -281,6 +296,27 @@ def main() -> int:
         call_type = doc.get("metadata", {}).get("call_type")
         if structured is not None and call_type in schemas:
             validate_schema(structured, schemas[call_type], where)
+
+    # Phase 2 procurement chain (P7). Kept out of `calls/` so the reorder /
+    # vendor / callback fixtures never enter the weekly reconciliation above.
+    for path in sorted((FIXTURES / "procurement").glob("*.json")):
+        where = f"procurement/{path.name}"
+        doc = load(path)
+        if doc is None:
+            continue
+        scan_phones(doc, where)
+        check_envelope(doc, where, seen_keys)
+        check_disclosure(doc, where)
+
+        call_type = doc.get("metadata", {}).get("call_type")
+        if call_type not in schemas:
+            fail(where, f"unknown metadata.call_type {call_type!r}")
+            continue
+        structured = doc.get("structured_result")
+        if structured is None:
+            fail(where, "completed call fixture has null structured_result")
+            continue
+        validate_schema(structured, schemas[call_type], where)
 
     # ---- reconciliation against the golden summary
     if expected:
