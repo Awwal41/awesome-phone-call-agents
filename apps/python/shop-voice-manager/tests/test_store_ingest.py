@@ -218,7 +218,7 @@ def test_rejected_calls_do_not_shift_the_totals(tmp_path):
 # ---------------------------------------------------------------- Phase 2 vendors (P1) + new goods
 
 
-def test_v1_ledger_upgrades_to_v2(tmp_path):
+def test_v1_ledger_upgrades_to_current(tmp_path):
     path = tmp_path / "old.db"
     c = store.connect(path)
     # Simulate a v1 stamp with only core tables present, then re-init.
@@ -228,8 +228,10 @@ def test_v1_ledger_upgrades_to_v2(tmp_path):
         c.execute("DROP TABLE IF EXISTS vendors")
         c.execute("DROP TABLE IF EXISTS restock_requests")
         c.execute("DROP TABLE IF EXISTS orders")
+        c.execute("DROP TABLE IF EXISTS payment_intents")
+        c.execute("DROP TABLE IF EXISTS payment_events")
     store.initialize(c)
-    assert store.schema_version(c) == 2
+    assert store.schema_version(c) == store.SCHEMA_VERSION
     store.check_compatible(c)
     tables = {
         r["name"]
@@ -237,7 +239,8 @@ def test_v1_ledger_upgrades_to_v2(tmp_path):
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     }
-    assert {"vendors", "restock_requests", "orders"} <= tables
+    assert {"vendors", "restock_requests", "orders",
+            "payment_intents", "payment_events"} <= tables
     c.close()
 
 

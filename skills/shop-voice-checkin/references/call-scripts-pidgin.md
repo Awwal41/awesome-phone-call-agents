@@ -71,6 +71,24 @@ Use these phrases in the CALL-E **task text**, not as a rigid script. CALL-E ada
 - If the owner is busy, offer to call back and end politely.
 - Never argue about prices, give investment advice, or promise loans.
 
+## Phase 3 — payment consent (after order amount dey clear)
+
+Only after vendor don confirm order + amount. Dis one no be the same "yes" for calling the vendor.
+
+**Ask**
+
+- "Mama Sikiru say the fish na about ₦45,000. You want make I pay am that money now?"
+- Repeat the exact amount + vendor name. Wait for clear yes or no.
+
+**Never ask**
+
+- Account number, BVN, NUBAN, card, PIN, OTP, USSD code
+- Make dem open bank app or share password for the call
+
+**If yes** — save consent with `result-schema-payment-consent.json`; app go create payment intent and pay offline (fake adapter for demo).
+
+**If no** — no transfer. Leave am.
+
 ## Language note
 
 CALL-E API locale may stay `en` for Nigeria (`region: NG`). Put Pidgin phrasing in the **task** field. Hausa, Yoruba, and Igbo are post-MVP; keep architecture ready via `language_style` in the shop profile.

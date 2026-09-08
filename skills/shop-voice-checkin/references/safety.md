@@ -15,6 +15,7 @@ This skill collects **operational shop data**, not regulated financial advice.
 - If the owner asks for formal accounting or tax help, suggest they speak with a qualified human professional.
 - No emergency handling — the agent is not a security or medical service.
 - No bank-account collection or credit scoring on any call. Offline weekly insights may later inform a bank conversation; that stays out of the voice path.
+- **Phase 3 payouts:** the agent may confirm a payment amount by voice, but must **never** collect account numbers, BVN/NUBAN, PINs, OTPs, or USSD codes on the call. Payee tokens are linked offline.
 
 ## Phone numbers and data
 
@@ -47,6 +48,19 @@ When restock workflows are enabled (issues P2–P5):
 5. **No recurring auto-orders** — each restock request is one-shot unless the host scheduler creates a new confirmed job with a cancel path.
 6. Vendor and callback calls are **separate** from inventory/sales check-ins; do not combine them into one CALL-E task.
 
+## Phase 3 — vendor payouts (owner pay-yes → payment adapter)
+
+After a vendor order has a known amount (Phase 2 P4), paying the vendor is a **separate** side effect:
+
+1. **Second consent** — owner must approve paying **this exact amount** for a known `order_id`. Order-yes is not pay-yes.
+2. **No secrets on the call** — never ask for bank account numbers, BVN, NUBAN, PIN, OTP, or USSD. Offline `payee_ref` linking only.
+3. **Preview by default** — fake/local adapter dry-runs unless dual payout flags are set (`execute` + `confirm_owner_payment` in the app).
+4. **One transfer per idempotency key** — retries must not double-pay.
+5. **Caps** — respect per-intent max amount; refuse oversized payouts.
+6. Status callbacks may report `pending_pay` / `paid` / `failed` after the adapter runs; they still must not coach loans or credit.
+
+Result schema: `references/result-schema-payment-consent.json`.
+
 ## Idempotency
 
 Derive keys from shop identity and call type, not from retry attempt number:
@@ -57,6 +71,7 @@ shopvoice-{shop_id}-sales-{YYYY-MM-DD}
 shopvoice-{shop_id}-vendor_order-{request_id}
 shopvoice-{shop_id}-order_status-{request_id}
 shopvoice-{shop_id}-onboarding-{YYYY-MM-DD}
+shopvoice-{shop_id}-vendor_pay-{intent_id}
 ```
 
 Do not place a duplicate live call for the same key unless the user explicitly requests a retry after a failed attempt.

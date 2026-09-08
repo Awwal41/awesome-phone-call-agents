@@ -2,7 +2,7 @@
 
 **Your business manager, on the phone** — after check-ins, help the owner restock by calling vendors and calling the owner back with status.
 
-This document is the product workflow for Phase 2. Implementation tasks are tracked as GitHub issues `P1`–`P8` (see [PROJECT_PLAN.md](./PROJECT_PLAN.md)).
+This document is the product workflow for Phase 2. Implementation tasks are tracked as GitHub issues `P1`–`P8` (see [PROJECT_PLAN.md](./PROJECT_PLAN.md)). Phase 3 vendor payouts are below (`P9`–`P12`).
 
 ## Goal
 
@@ -56,7 +56,49 @@ Later the owner can say only *"call Mama Sikiru for the fish"* because the direc
 
 Suggested remaining order for Aranwa: **P2 + P3** → **P6** → **P4** → **P5** → **P7**.
 
+### Phase 3 hooks (read before implementing P3–P7)
+
+Vendor **payouts** are Phase 3 (Awwal, P9–P12). Keep Phase 2 compatible:
+
+- **P3** — name / goods / phone only. No bank secrets on the call.
+- **P4** — persist `orders.amount` when the vendor states a price.
+- **P5** — leave room for optional payment status (`pending_pay` / `paid` / `failed`) later; do not transfer money in P5.
+- **P7** — fixture chain may stop at owner callback; P12 appends payment.
+
 **New goods:** Already supported — any product name spoken on an inventory call is upserted into `products` (see inventory scripts + `test_new_goods_mentioned_on_inventory_call_are_added`).
+
+---
+
+## Phase 3 — vendor payouts (bank / payment rail)
+
+**Goal:** After a confirmed vendor order has an amount, the agent can pay the vendor **on behalf of the owner** using an offline-linked payee token — never by collecting bank credentials on the phone.
+
+```text
+Order placed (Phase 2) + amount known
+  → Ask owner: pay this exact amount?
+  → payment_intent (draft → owner_approved)
+  → payment adapter (fake by default; real rail later)
+  → Owner callback may include paid / failed
+```
+
+| Layer | Owns | Does not own |
+| --- | --- | --- |
+| CALL-E / skill | Second consent, amount read-back | Account numbers, PIN, OTP |
+| SQLite ledger | Intents, events, masked payee refs | Holding customer funds |
+| `payments/` adapter | Exactly one transfer per idempotency key | Recurring auto-pay |
+
+### Issue map (Phase 3)
+
+| # | Issue | Task | Owner |
+| --- | --- | --- | --- |
+| P9 | [#37](https://github.com/Awwal41/awesome-phone-call-agents/issues/37) | Schema v3: payee fields + payment_intents / events | **Done** — Awwal |
+| P10 | [#38](https://github.com/Awwal41/awesome-phone-call-agents/issues/38) | Fake payment adapter (preview default) | **Done** — Awwal |
+| P11 | [#39](https://github.com/Awwal41/awesome-phone-call-agents/issues/39) | Payment consent safety + result schema | **Done** — Awwal |
+| P12 | [#40](https://github.com/Awwal41/awesome-phone-call-agents/issues/40) | Fixtures + integration tests | **Done** — Awwal |
+
+Idempotency: `shopvoice-{shop_id}-vendor_pay-{intent_id}`.
+
+Demo path (no network): link a fake `payee_ref` → create intent from order → approve from fixture → `payments.submit_payment` with live flags for local fake transfer (still no bank API).
 
 ## Still open from Phase 1
 

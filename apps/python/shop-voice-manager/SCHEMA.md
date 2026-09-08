@@ -92,10 +92,10 @@ leaves an audit trail explaining why nothing was written.
 
 ## Phase 2 tables (P1 landed — vendors / restock_requests / orders)
 
-Schema version **2**. `store.py` creates these tables and upgrades v1 ledgers in
-place. CRUD for vendors is implemented (`upsert_vendor`, `find_vendor_by_name`,
-`list_vendors` with masked phones). Restock request and order **write helpers**
-for live dials remain Phase 2 follow-ups (P2–P5).
+Schema version **2** originally. CRUD for vendors is implemented
+(`upsert_vendor`, `find_vendor_by_name`, `list_vendors` with masked phones).
+Restock request and order **write helpers** for live dials remain Phase 2
+follow-ups (P2–P5).
 
 ```sql
 CREATE TABLE vendors (
@@ -106,6 +106,8 @@ CREATE TABLE vendors (
   phone_e164      TEXT,              -- null until owner provides E.164
   goods_json      TEXT NOT NULL,     -- e.g. ["fish","crayfish"]
   notes           TEXT,
+  payee_ref       TEXT,              -- Phase 3: offline provider token
+  payee_provider  TEXT,              -- Phase 3: fake | paystack | …
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL,
   UNIQUE (shop_id, name_normalized)
@@ -134,6 +136,47 @@ CREATE TABLE orders (
   created_at         TEXT NOT NULL
 );
 ```
+
+## Phase 3 tables (P9 — payments)
+
+Schema version **3**. Offline payee linking + payment intents. Voice never
+collects bank account numbers, PINs, or OTPs; `payee_ref` is a provider
+recipient token linked outside the call path.
+
+```sql
+CREATE TABLE payment_intents (
+  intent_id             TEXT PRIMARY KEY,
+  order_id              TEXT NOT NULL,
+  shop_id               TEXT NOT NULL,
+  vendor_id             TEXT NOT NULL,
+  amount                REAL NOT NULL,
+  currency              TEXT NOT NULL DEFAULT 'NGN',
+  status                TEXT NOT NULL,  -- draft | owner_approved | submitted | paid | failed | cancelled
+  owner_approved        INTEGER NOT NULL DEFAULT 0,
+  idempotency_key       TEXT NOT NULL UNIQUE,
+  payee_ref             TEXT,           -- snapshot at submit
+  provider              TEXT,
+  provider_transfer_id  TEXT,
+  source_call_id        TEXT,
+  created_at            TEXT NOT NULL,
+  updated_at            TEXT NOT NULL
+);
+
+CREATE TABLE payment_events (
+  event_id    TEXT PRIMARY KEY,
+  intent_id   TEXT NOT NULL,
+  event_type  TEXT NOT NULL,  -- created | approved | preview | submitted | paid | failed | refused
+  detail      TEXT,
+  created_at  TEXT NOT NULL
+);
+```
+
+Helpers: `link_vendor_payee`, `create_payment_intent`, `approve_payment_intent`,
+`record_payment_event`, `get_payment_intent`, `find_payment_intent_by_key`,
+`list_payment_events`, `mask_payee_ref`. Fake submit path:
+`payments.submit_payment` (preview default).
+
+v1 and v2 ledgers upgrade in place via `initialize` / `check_compatible`.
 
 ### New goods (already supported on inventory ingest)
 

@@ -7,7 +7,7 @@ more often than schema does.
 
     python3 store.py --init shop.db
 
-Schema contract: SCHEMA.md. Refs #14, #33 (P1 vendors).
+Schema contract: SCHEMA.md. Refs #14, #33 (P1 vendors), #37 (P9 payments).
 """
 
 from __future__ import annotations
@@ -16,9 +16,10 @@ import argparse
 import json
 import sqlite3
 import sys
+import uuid
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -65,6 +66,8 @@ CREATE TABLE IF NOT EXISTS vendors (
   phone_e164 TEXT,
   goods_json TEXT NOT NULL DEFAULT '[]',
   notes TEXT,
+  payee_ref TEXT,
+  payee_provider TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (shop_id, name_normalized)
@@ -90,14 +93,39 @@ CREATE TABLE IF NOT EXISTS orders (
   callback_call_id TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS payment_intents (
+  intent_id TEXT PRIMARY KEY,
+  order_id TEXT NOT NULL,
+  shop_id TEXT NOT NULL,
+  vendor_id TEXT NOT NULL,
+  amount REAL NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'NGN',
+  status TEXT NOT NULL,
+  owner_approved INTEGER NOT NULL DEFAULT 0,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  payee_ref TEXT,
+  provider TEXT,
+  provider_transfer_id TEXT,
+  source_call_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS payment_events (
+  event_id TEXT PRIMARY KEY,
+  intent_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  detail TEXT,
+  created_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_readings_shop_date ON inventory_readings(shop_id, reading_date);
 CREATE INDEX IF NOT EXISTS idx_sales_shop_date ON daily_sales(shop_id, sales_date);
 CREATE INDEX IF NOT EXISTS idx_receipts_shop ON call_receipts(shop_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_vendors_shop ON vendors(shop_id, name_normalized);
 CREATE INDEX IF NOT EXISTS idx_restock_shop ON restock_requests(shop_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_payment_intents_shop ON payment_intents(shop_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_payment_events_intent ON payment_events(intent_id, created_at);
 """
-
 
 class StoreError(Exception):
     pass
@@ -121,14 +149,29 @@ def connect(path: Path | str, read_only: bool = False) -> sqlite3.Connection:
     return conn
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _ensure_vendor_payee_columns(conn: sqlite3.Connection) -> None:
+    """v2 → v3: add offline payee fields without rebuilding the vendors table."""
+    cols = _table_columns(conn, "vendors")
+    if "payee_ref" not in cols:
+        conn.execute("ALTER TABLE vendors ADD COLUMN payee_ref TEXT")
+    if "payee_provider" not in cols:
+        conn.execute("ALTER TABLE vendors ADD COLUMN payee_provider TEXT")
+
+
 def initialize(conn: sqlite3.Connection) -> None:
     """Create the schema if absent. Safe to call on an existing ledger.
 
-    Version 1 ledgers are upgraded in place: Phase 2 tables are added with
-    ``CREATE TABLE IF NOT EXISTS`` and the meta version is bumped to 2.
+    Older ledgers upgrade in place: missing tables are created with
+    ``CREATE TABLE IF NOT EXISTS``, vendor payee columns are added, and the
+    meta version is bumped to the current schema.
     """
     with conn:
         conn.executescript(SCHEMA)
+        _ensure_vendor_payee_columns(conn)
         row = conn.execute(
             "SELECT value FROM schema_meta WHERE key = 'version'"
         ).fetchone()
@@ -137,8 +180,7 @@ def initialize(conn: sqlite3.Connection) -> None:
                 "INSERT INTO schema_meta (key, value) VALUES ('version', ?)",
                 (str(SCHEMA_VERSION),),
             )
-        elif int(row["value"]) == 1:
-            # v1 → v2: new tables already created above; only the stamp changes.
+        elif int(row["value"]) < SCHEMA_VERSION:
             conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
                 (str(SCHEMA_VERSION),),
@@ -152,7 +194,7 @@ def schema_version(conn: sqlite3.Connection) -> int:
 
 def check_compatible(conn: sqlite3.Connection) -> None:
     found = schema_version(conn)
-    if found == 1:
+    if 1 <= found < SCHEMA_VERSION:
         initialize(conn)
         found = schema_version(conn)
     if found != SCHEMA_VERSION:
@@ -170,6 +212,16 @@ def mask_phone(phone: str | None) -> str:
     if len(digits) < 4:
         return "***"
     return f"+{'*' * (len(digits) - 4)}{digits[-4:]}"
+
+
+def mask_payee_ref(payee_ref: str | None) -> str:
+    """Mask an offline payee token for logs. Never invent characters."""
+    if not payee_ref:
+        return ""
+    text = str(payee_ref).strip()
+    if len(text) < 4:
+        return "***"
+    return f"{'*' * (len(text) - 4)}{text[-4:]}"
 
 
 def _vendor_id(shop_id: str, name_normalized: str) -> str:
@@ -365,9 +417,158 @@ def list_vendors(conn: sqlite3.Connection, *, shop_id: str) -> list[dict]:
     for row in rows:
         item = dict(row)
         item["phone_masked"] = mask_phone(item.get("phone_e164"))
+        item["payee_ref_masked"] = mask_payee_ref(item.get("payee_ref"))
         item["goods"] = json.loads(item.get("goods_json") or "[]")
         out.append(item)
     return out
+
+
+# ------------------------------------------------------------------ payments (P9)
+
+
+def link_vendor_payee(
+    conn: sqlite3.Connection,
+    *,
+    vendor_id: str,
+    payee_ref: str,
+    payee_provider: str,
+    now: str,
+) -> None:
+    """Attach an offline payee token to a vendor. Never invent bank details.
+
+    ``payee_ref`` is a provider recipient code / token obtained outside the
+    voice path (e.g. Paystack transfer recipient). Full account numbers, PINs,
+    and OTPs must not be stored here.
+    """
+    ref = (payee_ref or "").strip()
+    provider = (payee_provider or "").strip().lower()
+    if not ref or not provider:
+        raise StoreError("payee_ref and payee_provider are required")
+    row = conn.execute(
+        "SELECT vendor_id FROM vendors WHERE vendor_id = ?", (vendor_id,)
+    ).fetchone()
+    if row is None:
+        raise StoreError(f"unknown vendor_id: {vendor_id}")
+    conn.execute(
+        "UPDATE vendors SET payee_ref = ?, payee_provider = ?, updated_at = ?"
+        " WHERE vendor_id = ?",
+        (ref, provider, now, vendor_id),
+    )
+
+
+def record_payment_event(
+    conn: sqlite3.Connection,
+    *,
+    intent_id: str,
+    event_type: str,
+    detail: str | None,
+    created_at: str,
+    event_id: str | None = None,
+) -> str:
+    eid = event_id or f"pevt-{uuid.uuid4().hex[:16]}"
+    conn.execute(
+        "INSERT INTO payment_events (event_id, intent_id, event_type, detail, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (eid, intent_id, event_type, detail, created_at),
+    )
+    return eid
+
+
+def create_payment_intent(
+    conn: sqlite3.Connection,
+    *,
+    order_id: str,
+    shop_id: str,
+    vendor_id: str,
+    amount: float,
+    currency: str,
+    idempotency_key: str,
+    now: str,
+    source_call_id: str | None = None,
+    intent_id: str | None = None,
+) -> str:
+    """Create a draft payment intent for a confirmed order. Returns ``intent_id``."""
+    if amount is None or float(amount) <= 0:
+        raise StoreError("payment amount must be > 0")
+    key = (idempotency_key or "").strip()
+    if not key:
+        raise StoreError("idempotency_key is required")
+    existing = conn.execute(
+        "SELECT intent_id, status FROM payment_intents WHERE idempotency_key = ?",
+        (key,),
+    ).fetchone()
+    if existing is not None:
+        return existing["intent_id"]
+    iid = intent_id or f"pay-{uuid.uuid4().hex[:16]}"
+    conn.execute(
+        "INSERT INTO payment_intents"
+        " (intent_id, order_id, shop_id, vendor_id, amount, currency, status,"
+        "  owner_approved, idempotency_key, payee_ref, provider,"
+        "  provider_transfer_id, source_call_id, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, 'draft', 0, ?, NULL, NULL, NULL, ?, ?, ?)",
+        (iid, order_id, shop_id, vendor_id, float(amount), currency or "NGN",
+         key, source_call_id, now, now),
+    )
+    record_payment_event(
+        conn, intent_id=iid, event_type="created",
+        detail=f"order={order_id}", created_at=now,
+    )
+    return iid
+
+
+def approve_payment_intent(
+    conn: sqlite3.Connection,
+    *,
+    intent_id: str,
+    now: str,
+    source_call_id: str | None = None,
+) -> None:
+    """Mark owner consent for this exact intent amount."""
+    row = conn.execute(
+        "SELECT status FROM payment_intents WHERE intent_id = ?", (intent_id,)
+    ).fetchone()
+    if row is None:
+        raise StoreError(f"unknown intent_id: {intent_id}")
+    if row["status"] in ("paid", "submitted"):
+        return
+    if row["status"] == "cancelled":
+        raise StoreError("cannot approve a cancelled payment intent")
+    conn.execute(
+        "UPDATE payment_intents SET status = 'owner_approved', owner_approved = 1,"
+        " source_call_id = COALESCE(?, source_call_id), updated_at = ?"
+        " WHERE intent_id = ?",
+        (source_call_id, now, intent_id),
+    )
+    record_payment_event(
+        conn, intent_id=intent_id, event_type="approved",
+        detail="owner_approved", created_at=now,
+    )
+
+
+def get_payment_intent(
+    conn: sqlite3.Connection, *, intent_id: str
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM payment_intents WHERE intent_id = ?", (intent_id,)
+    ).fetchone()
+
+
+def find_payment_intent_by_key(
+    conn: sqlite3.Connection, *, idempotency_key: str
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM payment_intents WHERE idempotency_key = ?",
+        (idempotency_key,),
+    ).fetchone()
+
+
+def list_payment_events(
+    conn: sqlite3.Connection, *, intent_id: str
+) -> list[sqlite3.Row]:
+    return list(conn.execute(
+        "SELECT * FROM payment_events WHERE intent_id = ? ORDER BY created_at, event_id",
+        (intent_id,),
+    ))
 
 
 def main() -> int:
@@ -392,7 +593,8 @@ def main() -> int:
         print(f"schema v{schema_version(conn)}")
         for table in ("shops", "products", "inventory_readings", "daily_sales",
                       "procurement_items", "call_receipts", "vendors",
-                      "restock_requests", "orders"):
+                      "restock_requests", "orders", "payment_intents",
+                      "payment_events"):
             n = conn.execute(f"SELECT COUNT(*) c FROM {table}").fetchone()["c"]
             print(f"  {table:<20} {n}")
         conn.close()

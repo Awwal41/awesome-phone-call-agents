@@ -69,3 +69,21 @@ Use when the shop owner prefers standard English, or for India pilots (`region: 
 ## Tone rules
 
 Same as Pidgin scripts: accept approximations, one question at a time, no financial advice.
+
+## Phase 3 — payment consent (after order amount is known)
+
+Use only after a vendor order exists with an amount. Separate call (or clearly separate turn) from the restock yes.
+
+**Ask**
+
+- "Mama Sikiru confirmed the fish for about ₦45,000. Do you want me to pay her that amount now?"
+- Read back the **exact** amount and vendor name. Require an explicit yes or no.
+
+**Never ask**
+
+- Bank account number, BVN, NUBAN, card number, PIN, OTP, or USSD code
+- To "send your password" or open a banking app during the call
+
+**If yes** — record payment consent via `result-schema-payment-consent.json`; the app creates/approves a `payment_intent` and the fake (or later real) adapter pays offline.
+
+**If no** — leave the intent draft/cancelled; do not submit a transfer.

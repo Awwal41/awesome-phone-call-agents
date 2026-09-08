@@ -96,7 +96,8 @@ shopvoice-{shop_id}-inventory-{YYYY-MM-DD}
 shopvoice-{shop_id}-sales-{YYYY-MM-DD}
 ```
 
-Phase 2 keys (when enabled): `vendor_order`, `order_status`, `onboarding` — see `references/safety.md`.
+Phase 2 keys (when enabled): `vendor_order`, `order_status`, `onboarding` — see `references/safety.md`.  
+Phase 3 payout key: `vendor_pay` — see `references/result-schema-payment-consent.json`.
 
 ## Runnable app
 
@@ -126,4 +127,4 @@ For general scheduler-wrapper guidance across other hosts, see [`call-reminder`]
 ## Related project docs
 
 Hackathon plan: `docs/projects/voice-shop-manager/PROJECT_PLAN.md`  
-Phase 2 next steps: `docs/projects/voice-shop-manager/NEXT_STEPS.md`
+Phase 2 + Phase 3 next steps: `docs/projects/voice-shop-manager/NEXT_STEPS.md`

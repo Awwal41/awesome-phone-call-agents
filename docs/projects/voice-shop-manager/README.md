@@ -19,14 +19,18 @@ Procurement loop + new-user onboarding — see **[NEXT_STEPS.md](./NEXT_STEPS.md
 Low stock → ask to place order → save vendors → call vendors → call owner back
 ```
 
-**Done locally:** P1 (vendor schema) · P8 (safety docs) · new-goods probe on inventory calls  
-**Assigned to Aranwa:** P2–P7 plus remaining open Phase 1 items
+**Done locally:** P1 (vendor schema) · P8 (safety docs) · new-goods probe on inventory calls · Phase 3 P9–P12 payout foundation  
+**Assigned to Aranwa:** P2–P7 plus remaining open Phase 1 items (leave Phase 3 payment hooks — see NEXT_STEPS)
+
+## Phase 3 (vendor payouts)
+
+Owner pay-yes → payment intent → fake adapter. Issues [#37](https://github.com/Awwal41/awesome-phone-call-agents/issues/37)–[#40](https://github.com/Awwal41/awesome-phone-call-agents/issues/40) (Awwal). Details in [NEXT_STEPS.md](./NEXT_STEPS.md).
 
 ## Team
 
 | Person | Status |
 | --- | --- |
-| **Awwal** | Demo complete; landed P1 + P8 foundations |
+| **Awwal** | Demo + P1/P8 + Phase 3 payout foundation |
 | **Aranwa** | Owns remaining Phase 2 (P2–P7) and open follow-ups |
 | **Rajput** | Prior app/SDK work; Phase 2 dials handed to Aranwa |
 

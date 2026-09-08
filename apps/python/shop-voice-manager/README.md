@@ -89,23 +89,40 @@ so a live call faces the identical confidence gate. See
 | `ingest.py` | Turns a CALL-E result into ledger rows; confidence-gated, idempotent (R6) |
 | `demo_ledger.py` | Feeds the fixtures through `ingest.py` → `store.py`. Only the input is fake — the write path is the production one |
 | `live_call.py` | The live CALL-E path (R5): trusted-host check, consent check, crash-safe checkpoints, result normalisation |
+| `payments/` | Phase 3 fake payment adapter — preview by default, no bank network |
 | `SCHEMA.md` | The ledger contract both sides build against |
-| `tests/` | 42 tests. No credentials, no network, no calls |
+| `tests/` | Pytest suite. No credentials, no network, no calls |
+
+## Phase 3 — vendor payouts (demo)
+
+After a confirmed order has an amount, link an offline `payee_ref`, create a
+`payment_intent`, approve from owner consent, then submit through the **fake**
+adapter (still no bank API):
+
+```bash
+# See tests/test_payments.py for the full lifecycle.
+pytest tests/test_payments.py -q
+```
+
+Live bank rails (Paystack/Flutterwave/etc.) are not wired; the adapter interface
+is the seam. Dual flags for fake execute: `SubmitFlags(execute=True,
+confirm_owner_payment=True)`.
 
 ## Tests
 
 ```bash
 pip install -r requirements-dev.txt
-pytest tests -q                     # 67 tests
+pytest tests -q
 python fixtures/validate_fixtures.py
 ```
 
 Individual suites:
 
 ```bash
-pytest tests/test_live_call.py -q   # 25 tests — the live path, fully stubbed
+pytest tests/test_live_call.py -q   # the live path, fully stubbed
 pytest tests/test_store_ingest.py -q
 pytest tests/test_summarize.py -q
+pytest tests/test_payments.py -q    # Phase 3 payouts
 pytest tests/test_no_live_calls.py -q
 ```
 

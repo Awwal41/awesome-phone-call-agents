@@ -14,6 +14,8 @@
 
 > **Phase 2 (next):** Procurement loop — low stock → ask to order → save vendors → call vendors → call owner back with status; plus new-user onboarding into SQLite. See [`NEXT_STEPS.md`](./NEXT_STEPS.md) and issues P1–P8.
 
+> **Phase 3:** Vendor payouts — owner pay-yes → payment intent → fake (then real) payment adapter. Issues P9–P12 assigned to Awwal. Aranwa’s Phase 2 work should leave amount + status hooks (see comments on P2–P7).
+
 ---
 
 ## Progress snapshot
@@ -33,6 +35,7 @@ validation and tests with no credentials, no network, and no calls.
 | Insights, tests, docs | **7 / 8** (AR2–AR4, AR6–AR8) | India locale (AR5); P6/P7 | Aranwa |
 | Shared (S1–S4) | **4 / 4** | — | All |
 | Phase 2 procurement (P1–P8) | **2 / 8** (P1, P8) | P2–P7 → Aranwa | Team |
+| Phase 3 payouts (P9–P12) | **4 / 4** | Real bank rail (post-hackathon) | Awwal |
 
 ### Awwal — all tasks complete (demo mode)
 
@@ -82,6 +85,7 @@ python client.py --request example_request.json --weekly-summary
 Ordered by value.
 
 - [ ] **Phase 2 procurement loop** ([NEXT_STEPS.md](./NEXT_STEPS.md), issues [#33](https://github.com/Awwal41/awesome-phone-call-agents/issues/33)–[#36](https://github.com/Awwal41/awesome-phone-call-agents/issues/36), [#29](https://github.com/Awwal41/awesome-phone-call-agents/issues/29)–[#32](https://github.com/Awwal41/awesome-phone-call-agents/issues/32)). Low stock → ask to order → save vendors → call vendors → owner status callback; plus new-user onboarding.
+- [x] **Phase 3 vendor payouts (foundation)** ([NEXT_STEPS.md](./NEXT_STEPS.md), issues [#37](https://github.com/Awwal41/awesome-phone-call-agents/issues/37)–[#40](https://github.com/Awwal41/awesome-phone-call-agents/issues/40)). Schema v3 + fake adapter + consent schema + tests. Real bank rail later.
 - [ ] **R5 — live CALL-E SDK path** ([#15](https://github.com/Awwal41/awesome-phone-call-agents/issues/15)). Required before live P4/P5 dials.
 - [ ] **AR5 — India locale** ([#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21)). Not started. Only NG/NGN profiles exist.
 - [ ] **A9 — upstream PR** ([#9](https://github.com/Awwal41/awesome-phone-call-agents/issues/9)).
@@ -273,9 +277,21 @@ Tracked in [`NEXT_STEPS.md`](./NEXT_STEPS.md) and issues P1–P8:
 | --- | --- |
 | Ask owner to restock when items are running low | Auto-order without a spoken yes |
 | Save vendors (name, goods, phone) for reuse | Scraping or cold-calling unknown suppliers |
-| Place one outbound call to a saved vendor | Payments, escrow, or delivery logistics |
-| Call owner back with order status / ETA | Bank account linking or credit decisions |
+| Place one outbound call to a saved vendor | Delivery logistics (payments → Phase 3) |
+| Call owner back with order status / ETA | Bank account linking or credit decisions on the call |
 | New-user onboarding call → `shops` / products in DB | Multi-tenant SaaS portal |
+
+### Phase 3 scope (vendor payouts)
+
+Tracked in [`NEXT_STEPS.md`](./NEXT_STEPS.md) and issues P9–P12 (Awwal):
+
+| In scope | Still out of scope |
+| --- | --- |
+| Offline `payee_ref` link on a saved vendor | Collecting account numbers / PIN / OTP on a call |
+| Owner pay-yes for an exact order amount | Auto-pay without a second spoken yes |
+| Fake payment adapter (preview default) | Production Paystack/Flutterwave credentials in CI |
+| `payment_intents` + `payment_events` ledger | Escrow, lending, or credit scoring |
+| Idempotent one-shot transfer per intent | Hidden recurring payouts |
 
 ### Contribution layout (target paths)
 
@@ -366,7 +382,7 @@ flowchart TB
 | **Inventory** | Stock counts from morning call | Dead stock, reorder offer when running low |
 | **Sales** | Daily revenue + top sellers from evening call | Trends, declining SKUs |
 | **Procurement** | Capture supplier + price in conversation | Vendor directory, vendor dial, owner status callback |
-| **Finance** | Rough gross from buy/sell hints | Margins, working capital (offline; no bank APIs yet) |
+| **Finance** | Rough gross from buy/sell hints | Phase 3: consent-gated vendor payouts (fake adapter first) |
 | **Business advisor** | Weekly text summary | New-user onboarding + reorder coaching |
 
 ---
@@ -475,12 +491,23 @@ Full narrative: [`NEXT_STEPS.md`](./NEXT_STEPS.md).
 4. **Owner callback (P5)** — separate call telling the owner the order status / ETA.
 5. **New-user intake (P6)** — first call collects shop name, phone, region, locale, staples into `shops` / `products`.
 
+### Phase 3 — vendor payout loop
+
+Full narrative: [`NEXT_STEPS.md`](./NEXT_STEPS.md) Phase 3.
+
+1. **Payee link (P9)** — offline `payee_ref` / `payee_provider` on `vendors` (never invented on a call).
+2. **Payment intent (P9)** — create from `order_id` + amount with a stable idempotency key.
+3. **Owner pay-yes (P11)** — second consent for the exact amount; result schema + safety docs.
+4. **Adapter (P10)** — fake rail preview by default; dual flags for local fake execute.
+5. **Fixtures/tests (P12)** — consent → approve → pay without network.
+
 Idempotency keys (extend MVP pattern):
 
 ```text
 shopvoice-{shop_id}-vendor_order-{request_id}
 shopvoice-{shop_id}-order_status-{request_id}
 shopvoice-{shop_id}-onboarding-{YYYY-MM-DD}
+shopvoice-{shop_id}-vendor_pay-{intent_id}
 ```
 
 ---
@@ -535,6 +562,7 @@ CREATE TABLE call_receipts (
 );
 
 -- Phase 2 (see SCHEMA.md + NEXT_STEPS.md): vendors, restock_requests, orders
+-- Phase 3 (see SCHEMA.md): payment_intents, payment_events, vendors.payee_*
 ```
 
 ---
@@ -690,6 +718,15 @@ Rajput and Aranwa: ask Awwal to add you as a **collaborator** on `Awwal41/awesom
 | P6 | [#30](https://github.com/Awwal41/awesome-phone-call-agents/issues/30) | New-user onboarding → shop profile in DB | Todo — assigned Aranwa |
 | P7 | [#31](https://github.com/Awwal41/awesome-phone-call-agents/issues/31) | Fixtures + integration test for procurement chain | Todo — assigned Aranwa |
 | P8 | [#32](https://github.com/Awwal41/awesome-phone-call-agents/issues/32) | Safety + skill docs for multi-party calls | **Done** |
+
+### Phase 3 — vendor payouts (Awwal)
+
+| # | Issue | Task | Status |
+| --- | --- | --- | --- |
+| P9 | [#37](https://github.com/Awwal41/awesome-phone-call-agents/issues/37) | Payment ledger schema (payee + intents) | **Done** — schema v3 + store helpers |
+| P10 | [#38](https://github.com/Awwal41/awesome-phone-call-agents/issues/38) | Fake payment adapter (preview default) | **Done** — `payments/` module |
+| P11 | [#39](https://github.com/Awwal41/awesome-phone-call-agents/issues/39) | Payment consent safety + result schema | **Done** |
+| P12 | [#40](https://github.com/Awwal41/awesome-phone-call-agents/issues/40) | Payment fixtures + integration tests | **Done** |
 
 Narrative + suggested order: [`NEXT_STEPS.md`](./NEXT_STEPS.md).
 
