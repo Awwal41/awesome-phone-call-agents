@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 CREATE TABLE IF NOT EXISTS shops (
   id TEXT PRIMARY KEY, display_name TEXT, phone_e164 TEXT NOT NULL,
   region TEXT NOT NULL, locale TEXT NOT NULL, currency TEXT DEFAULT 'NGN',
+  language_style TEXT,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS products (
@@ -162,6 +163,16 @@ def _ensure_vendor_payee_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE vendors ADD COLUMN payee_provider TEXT")
 
 
+def _ensure_shop_language_column(conn: sqlite3.Connection) -> None:
+    """Add the per-shop speaking style without rebuilding the shops table.
+
+    A shop in Lagos and a shop in Pune want different calls. `locale` already
+    carried the language CALL-E speaks; this carries how it speaks it.
+    """
+    if "language_style" not in _table_columns(conn, "shops"):
+        conn.execute("ALTER TABLE shops ADD COLUMN language_style TEXT")
+
+
 def initialize(conn: sqlite3.Connection) -> None:
     """Create the schema if absent. Safe to call on an existing ledger.
 
@@ -172,6 +183,7 @@ def initialize(conn: sqlite3.Connection) -> None:
     with conn:
         conn.executescript(SCHEMA)
         _ensure_vendor_payee_columns(conn)
+        _ensure_shop_language_column(conn)
         row = conn.execute(
             "SELECT value FROM schema_meta WHERE key = 'version'"
         ).fetchone()
@@ -232,11 +244,14 @@ def _vendor_id(shop_id: str, name_normalized: str) -> str:
 
 def upsert_shop(conn: sqlite3.Connection, profile: dict) -> None:
     conn.execute(
-        "INSERT INTO shops (id, display_name, phone_e164, region, locale, currency, created_at)"
-        " VALUES (:id, :display_name, :phone, :region, :locale, :currency, :created_at)"
+        "INSERT INTO shops (id, display_name, phone_e164, region, locale, currency,"
+        " language_style, created_at)"
+        " VALUES (:id, :display_name, :phone, :region, :locale, :currency,"
+        " :language_style, :created_at)"
         " ON CONFLICT(id) DO UPDATE SET"
         "   display_name = excluded.display_name, phone_e164 = excluded.phone_e164,"
-        "   region = excluded.region, locale = excluded.locale, currency = excluded.currency",
+        "   region = excluded.region, locale = excluded.locale, currency = excluded.currency,"
+        "   language_style = COALESCE(excluded.language_style, shops.language_style)",
         {
             "id": profile["shop_id"],
             "display_name": profile.get("display_name"),
@@ -244,6 +259,7 @@ def upsert_shop(conn: sqlite3.Connection, profile: dict) -> None:
             "region": profile["region"],
             "locale": profile["locale"],
             "currency": profile.get("currency", "NGN"),
+            "language_style": profile.get("language_style"),
             "created_at": profile.get("consent_timestamp", ""),
         },
     )
