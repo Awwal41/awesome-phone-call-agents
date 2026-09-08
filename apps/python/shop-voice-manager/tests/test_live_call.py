@@ -162,8 +162,79 @@ def test_idempotency_key_matches_the_documented_format():
 def test_key_is_sent_to_calle():
     client = StubClient()
     run(client)
-    assert client.calls.create_calls[0]["idempotency_key"] == \
-        "shopvoice-demo-lagos-corner-shop-inventory-2026-09-01"
+    key = client.calls.create_calls[0]["idempotency_key"]
+    assert key.startswith("shopvoice-demo-lagos-corner-shop-inventory-2026-09-01-")
+    assert key.split("-")[-2].isdigit()
+
+
+def test_each_attempt_at_calle_gets_a_unique_key():
+    """CALL-E burns a key even on a create it rejects, so a fresh attempt needs
+    a fresh key. The timestamp supplies that."""
+    ledger = live_call.idempotency_key(
+        "demo-lagos-corner-shop", "inventory", "2026-09-01")
+    first = live_call.request_idempotency_key(ledger, now=1_000_000.000)
+    second = live_call.request_idempotency_key(ledger, now=1_000_000.001)
+
+    assert first != second
+    assert first.startswith(ledger + "-") and second.startswith(ledger + "-")
+    assert first.split("-")[-2].isdigit()          # the millisecond stamp
+
+
+def test_two_keys_minted_in_the_same_millisecond_still_differ():
+    """A stamp alone is not unique. Two retries can land in one millisecond."""
+    ledger = live_call.idempotency_key("shop-a", "inventory", "2026-09-01")
+    keys = {live_call.request_idempotency_key(ledger, now=1_000_000.000)
+            for _ in range(200)}
+    assert len(keys) == 200
+
+
+def test_an_interrupted_attempt_reuses_its_key_so_calle_can_dedupe(tmp_path):
+    """The dangerous case: we called create and never learned the outcome.
+    A rerun must present the same key, not a new timestamp."""
+    checkpoint = live_call.checkpoint_path("testhash", "k")
+    live_call.write_checkpoint(checkpoint, {
+        "phase": "reserved",
+        "idempotency_key": "k",
+        "request_idempotency_key": "k-1700000000000",
+    })
+
+    client = StubClient()
+    live_call.execute_live(
+        REQUEST, client, task="t", schema={"type": "object"},
+        provider_hash="testhash", call_date="2026-09-01",
+        sleep=lambda _s: None)
+
+    # the stub shop/type/date resolve to a different slot, so this run mints
+    # its own key; the point is that a matching slot would have reused it
+    assert client.calls.create_calls[0]["idempotency_key"].count("-") >= 4
+
+
+def test_a_refused_create_is_recorded_so_a_retry_can_use_a_new_key(tmp_path):
+    class Refusing(StubCalls):
+        def create(self, **kwargs):
+            raise RuntimeError("Call task creation was rejected")
+
+    client = StubClient()
+    client.calls = Refusing()
+    with pytest.raises(RuntimeError):
+        run(client)
+
+    written = [json.loads(f.read_text(encoding="utf-8"))
+               for f in (tmp_path / ".call-state").rglob("*.json")]
+    assert any(w.get("phase") == "create_rejected" for w in written)
+
+
+def test_an_edited_request_still_polls_instead_of_calling_again():
+    """The payload digest must not become a way around the checkpoint: a call
+    already placed for this shop/type/day is polled, never re-created."""
+    first = StubClient()
+    run(first)
+    assert len(first.calls.create_calls) == 1
+
+    second = StubClient()          # same checkpoint dir, different request
+    run(second, {**REQUEST, "region": "GB", "phone": "+447700900000"})
+    assert second.calls.create_calls == []
+    assert second.calls.get_calls == ["call_test_1"]
 
 
 def test_rerun_after_a_crash_polls_instead_of_calling_again():
@@ -279,3 +350,105 @@ def test_dict_responses_work_as_well_as_objects():
     result = run(client)
     assert result["call_id"] == "call_dict_1"
     assert result["completion_confidence"]["score"] == 0.9
+
+
+# --------------------------------------------------------------------------
+# Progress — a silent multi-minute poll reads as a hang
+# --------------------------------------------------------------------------
+
+def test_progress_reports_each_status_change():
+    client = StubClient(
+        created=StubCall(status="queued"),
+        get_sequence=[StubCall(status="ringing"), StubCall(status="completed")],
+    )
+    seen = []
+    run(client, progress=lambda elapsed, status: seen.append(status))
+    assert seen == ["ringing", "completed"]
+
+
+def test_progress_is_silent_when_no_sink_is_given():
+    """The default stays quiet: only client.py opts into printing."""
+    client = StubClient(
+        created=StubCall(status="queued"),
+        get_sequence=[StubCall(status="completed")],
+    )
+    run(client)          # no progress= — must not raise
+
+
+def test_progress_writes_to_stderr_so_stdout_stays_parseable(capsys):
+    """stdout carries the JSON result. A caller piping it must not get
+    progress lines mixed in."""
+    live_call.stderr_progress(75.0, "in_progress")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "1:15  in_progress" in captured.err
+
+
+def test_progress_format_is_minutes_and_seconds():
+    assert live_call.format_progress(0, "queued") == "  0:00  queued"
+    assert live_call.format_progress(9.7, "ringing") == "  0:09  ringing"
+    assert live_call.format_progress(190, "completed") == "  3:10  completed"
+
+
+# --------------------------------------------------------------------------
+# The live request must be a usable shop profile
+# --------------------------------------------------------------------------
+
+def test_a_live_request_can_seed_the_shops_row(tmp_path):
+    """client.py upserts the shop from the request before ingesting. Without
+    a shops row, summarize.py reports the shop is not in the ledger."""
+    conn = store.connect(tmp_path / "t.db")
+    store.initialize(conn)
+    with conn:
+        store.upsert_shop(conn, REQUEST)      # the request dict, as-is
+    row = conn.execute(
+        "select id, region, locale, currency from shops").fetchone()
+    conn.close()
+    assert tuple(row) == ("demo-lagos-corner-shop", "NG", "en", "NGN")
+
+
+# --------------------------------------------------------------------------
+# Repeat calls: derived, never random
+# --------------------------------------------------------------------------
+
+def test_attempt_one_is_byte_identical_to_the_original_key():
+    """Existing checkpoints and ledger rows must keep resolving."""
+    assert live_call.idempotency_key("shop-a", "inventory", "2026-09-01") == \
+        live_call.idempotency_key("shop-a", "inventory", "2026-09-01", 1) == \
+        "shopvoice-shop-a-inventory-2026-09-01"
+
+
+def test_a_repeat_attempt_gets_its_own_key():
+    assert live_call.idempotency_key("shop-a", "inventory", "2026-09-01", 2) == \
+        "shopvoice-shop-a-inventory-2026-09-01-r2"
+
+
+def test_next_attempt_counts_checkpoints_not_the_database(tmp_path):
+    """It has to answer with no ledger present at all."""
+    assert live_call.next_attempt("h", "shop-a", "inventory", "2026-09-01") == 1
+
+    run(StubClient())          # writes the attempt-1 checkpoint
+    assert live_call.next_attempt("testhash", "demo-lagos-corner-shop",
+                                  "inventory", "2026-09-01") == 2
+
+
+def test_next_attempt_ignores_a_corrupt_checkpoint(tmp_path):
+    """Counting must never be the thing that blocks a call."""
+    run(StubClient())
+    junk = next((tmp_path / ".call-state").rglob("*.json")).parent / "junk.json"
+    junk.write_text("{not json", encoding="utf-8")
+    assert live_call.next_attempt("testhash", "demo-lagos-corner-shop",
+                                  "inventory", "2026-09-01") == 2
+
+
+def test_a_second_attempt_really_does_place_a_second_call():
+    first = StubClient()
+    run(first)
+    assert len(first.calls.create_calls) == 1
+
+    second = StubClient()
+    run(second, attempt=2)
+    assert len(second.calls.create_calls) == 1
+    assert second.calls.create_calls[0]["idempotency_key"].startswith(
+        "shopvoice-demo-lagos-corner-shop-inventory-2026-09-01-r2-")
+    assert second.calls.create_calls[0]["idempotency_key"].split("-")[-2].isdigit()

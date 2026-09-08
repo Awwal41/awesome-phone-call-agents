@@ -21,6 +21,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
+import sys
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -35,6 +37,7 @@ TRUSTED_BASE_URLS = frozenset({DEFAULT_BASE_URL})
 
 CHECKPOINT_VERSION = 1
 POLL_INTERVAL_SECONDS = 5.0
+PROGRESS_HEARTBEAT_SECONDS = 30.0
 DEFAULT_TIMEOUT_SECONDS = 600.0
 
 # Statuses CALL-E can end on. Mirrors ingest.TERMINAL_WITHOUT_DATA plus success.
@@ -86,13 +89,79 @@ def provider_account_hash(api_key: str) -> str:
 # Request shaping
 # --------------------------------------------------------------------------
 
-def idempotency_key(shop_id: str, call_type: str, call_date: str) -> str:
+def idempotency_key(shop_id: str, call_type: str, call_date: str,
+                    attempt: int = 1) -> str:
     """One key per shop per call type per day, as specified in PROJECT_PLAN.md.
 
     The demo path emits `…-DEMO`. The live path must use the real date so a
     retry after a crash cannot place a second call.
+
+    `attempt` exists because "one call per day" is the safety default, not a
+    hard limit: an operator may legitimately need a second check-in after a
+    voicemail or a bad line. It must stay *derived*, never random. A random key
+    would give a crash-retry a fresh checkpoint path, find no `call_id`, and
+    dial a second time, which is the exact thing the checkpoint prevents.
+    Attempt 1 is byte-identical to the original key, so existing checkpoints
+    and ledgers keep resolving.
     """
-    return f"shopvoice-{shop_id}-{call_type}-{call_date}"
+    base = f"shopvoice-{shop_id}-{call_type}-{call_date}"
+    return base if attempt <= 1 else f"{base}-r{attempt}"
+
+
+def next_attempt(provider_hash: str, shop_id: str, call_type: str,
+                 call_date: str) -> int:
+    """The next unused attempt for this shop, type and day.
+
+    Counts checkpoints on disk rather than querying the ledger, so it still
+    answers when the database is unreachable, is a different file, or does not
+    exist yet. Checkpoints already record their own `idempotency_key`, which is
+    what makes this possible without renaming the files.
+    """
+    base = f"shopvoice-{shop_id}-{call_type}-{call_date}"
+    folder = STATE_DIR / provider_hash
+    if not folder.is_dir():
+        return 1
+    highest = 0
+    for path in folder.glob("*.json"):
+        try:
+            key = json.loads(path.read_text(encoding="utf-8")).get("idempotency_key")
+        except (json.JSONDecodeError, OSError):
+            continue          # a counting helper must never block a call
+        if key == base:
+            highest = max(highest, 1)
+        elif isinstance(key, str) and key.startswith(base + "-r"):
+            suffix = key[len(base) + 2:]
+            if suffix.isdigit():
+                highest = max(highest, int(suffix))
+    return highest + 1
+
+
+def request_idempotency_key(ledger_key: str, *, now: float | None = None) -> str:
+    """The key sent to CALL-E. Unique per attempt, by timestamp.
+
+    Two identifiers do two different jobs here, and conflating them is what
+    caused the "Idempotency key was reused with a different request" failure:
+
+    * `ledger_key` names a *slot* (shop, call type, day, attempt). It is
+      deterministic and it is what the checkpoint filename is derived from, so
+      a rerun lands on the same checkpoint and can see whether we already
+      dialled. It must never contain a timestamp.
+    * This key names one *attempt at CALL-E*. Nothing downstream reads it, so
+      a millisecond timestamp is free to make it unique.
+
+    A timestamp alone would be unsafe if it were minted on every run: a crash
+    between `create` and the checkpoint write would produce a new key on the
+    next run and place a second call. It is safe here because the minted key is
+    written into the checkpoint before `create` and reused by any rerun that
+    finds the call outcome unknown. See `execute_live`.
+
+    The suffix is not decoration. A millisecond stamp is not unique on its own:
+    two retries in the same millisecond produce the same key, which is the
+    collision this key exists to avoid. Entropy is safe here precisely because
+    the key is persisted and reused rather than recomputed.
+    """
+    stamp = int((time.time() if now is None else now) * 1000)
+    return f"{ledger_key}-{stamp}-{secrets.token_hex(3)}"
 
 
 def build_recipients(request: dict) -> list[dict]:
@@ -218,13 +287,35 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def format_progress(elapsed: float, status: str) -> str:
+    whole = int(elapsed)
+    return f"  {whole // 60}:{whole % 60:02d}  {status}"
+
+
+def stderr_progress(elapsed: float, status: str) -> None:
+    """Default progress sink. stderr, never stdout — stdout carries the JSON
+    result, and a caller piping it must not receive progress lines."""
+    print(format_progress(elapsed, status), file=sys.stderr, flush=True)
+
+
 def _poll_until_terminal(client: Any, call_id: str, *, timeout_seconds: float,
-                         sleep=time.sleep, monotonic=time.monotonic) -> Any:
-    deadline = monotonic() + timeout_seconds
+                         sleep=time.sleep, monotonic=time.monotonic,
+                         progress=None) -> Any:
+    started = monotonic()
+    deadline = started + timeout_seconds
     latest = None
+    last_status: str | None = None
+    last_emit = -PROGRESS_HEARTBEAT_SECONDS
     while monotonic() < deadline:
         latest = client.calls.get(call_id)
-        if _field(latest, "status") in TERMINAL_STATUSES:
+        status = _field(latest, "status", "unknown")
+        if progress is not None and (
+                status != last_status
+                or (monotonic() - started) - last_emit >= PROGRESS_HEARTBEAT_SECONDS):
+            elapsed = monotonic() - started
+            progress(elapsed, status)
+            last_status, last_emit = status, elapsed
+        if status in TERMINAL_STATUSES:
             return latest
         sleep(POLL_INTERVAL_SECONDS)
     raise LiveCallError(
@@ -236,8 +327,10 @@ def _poll_until_terminal(client: Any, call_id: str, *, timeout_seconds: float,
 
 def execute_live(request: dict, client: Any, *, task: str, schema: dict,
                  provider_hash: str, call_date: str | None = None,
+                 attempt: int = 1,
                  timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
-                 sleep=time.sleep, monotonic=time.monotonic) -> dict:
+                 sleep=time.sleep, monotonic=time.monotonic,
+                 progress=None) -> dict:
     """Place one call and return a result in `ingest.ingest_call` shape.
 
     Crash-safe: the checkpoint records the call id the moment CALL-E returns
@@ -250,7 +343,7 @@ def execute_live(request: dict, client: Any, *, task: str, schema: dict,
         )
 
     call_date = call_date or date.today().isoformat()
-    key = idempotency_key(request["shop_id"], request["call_type"], call_date)
+    key = idempotency_key(request["shop_id"], request["call_type"], call_date, attempt)
     checkpoint = checkpoint_path(provider_hash, key)
     state = read_checkpoint(checkpoint)
 
@@ -261,27 +354,52 @@ def execute_live(request: dict, client: Any, *, task: str, schema: dict,
         if _field(latest, "status") not in TERMINAL_STATUSES:
             latest = _poll_until_terminal(
                 client, call_id, timeout_seconds=timeout_seconds,
-                sleep=sleep, monotonic=monotonic)
+                sleep=sleep, monotonic=monotonic, progress=progress)
     else:
+        recipients = build_recipients(request)
+        # Reuse the key from an interrupted attempt: we cannot tell whether
+        # `create` landed, and letting CALL-E dedupe is the safe side of that
+        # doubt. Mint a fresh one only when CALL-E explicitly refused, because
+        # then no call exists and the old key is already burned.
+        previous = state.get("request_idempotency_key")
+        if isinstance(previous, str) and previous and state.get("phase") == "reserved":
+            request_key = previous
+        else:
+            request_key = request_idempotency_key(key)
         write_checkpoint(checkpoint, {
             "phase": "reserved",
             "provider_account_hash": provider_hash,
             "idempotency_key": key,
+            "request_idempotency_key": request_key,
             "masked_phone": mask_phone(request["phone"]),
             "updated_at": _now(),
         })
-        created = client.calls.create(
-            task=task,
-            recipients=build_recipients(request),
-            result_schema=schema,
-            idempotency_key=key,
-        )
+        try:
+            created = client.calls.create(
+                task=task,
+                recipients=recipients,
+                result_schema=schema,
+                idempotency_key=request_key,
+            )
+        except Exception as exc:
+            # Record that CALL-E refused, so a corrected retry knows no call
+            # was placed and is free to mint a new key instead of colliding.
+            write_checkpoint(checkpoint, {
+                "phase": "create_rejected",
+                "provider_account_hash": provider_hash,
+                "idempotency_key": key,
+                "request_idempotency_key": request_key,
+                "error": str(exc)[:300],
+                "updated_at": _now(),
+            })
+            raise
         call_id = _field(created, "id") or _field(created, "call_id")
         if not isinstance(call_id, str) or not call_id:
             write_checkpoint(checkpoint, {
                 "phase": "create_failed",
                 "provider_account_hash": provider_hash,
                 "idempotency_key": key,
+                "request_idempotency_key": request_key,
                 "updated_at": _now(),
             })
             raise LiveCallError("CALL-E create response carried no call id.")
@@ -290,12 +408,14 @@ def execute_live(request: dict, client: Any, *, task: str, schema: dict,
             "call_id": call_id,
             "provider_account_hash": provider_hash,
             "idempotency_key": key,
+            "request_idempotency_key": request_key,
             "masked_phone": mask_phone(request["phone"]),
             "updated_at": _now(),
         })
         latest = created if _field(created, "status") in TERMINAL_STATUSES else \
             _poll_until_terminal(client, call_id, timeout_seconds=timeout_seconds,
-                                 sleep=sleep, monotonic=monotonic)
+                                 sleep=sleep, monotonic=monotonic,
+                                 progress=progress)
 
     write_checkpoint(checkpoint, {
         "phase": "finished",

@@ -155,6 +155,7 @@ def run_live(args) -> int:
             schema=load_json(schema_path(request["call_type"])),
             provider_hash=live_call.provider_account_hash(api_key),
             call_date=call_date,
+            progress=live_call.stderr_progress,
         )
     except live_call.LiveCallError as exc:
         print(f"Live call failed: {exc}", file=sys.stderr)
@@ -169,6 +170,10 @@ def run_live(args) -> int:
         conn = store.connect(args.db)
         store.initialize(conn)
         try:
+            # Without this the readings land but `shops` stays empty, and
+            # summarize.py reports the shop is not in the ledger.
+            with conn:
+                store.upsert_shop(conn, request)
             verdict = ingest.ingest_call(conn, result)
         finally:
             conn.close()
