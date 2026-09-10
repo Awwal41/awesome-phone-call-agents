@@ -479,6 +479,14 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _log(msg: str) -> None:
+    """Server-side trace for the confidence gate and the chain decisions
+    built on it — where an operator watching the process, not the browser,
+    can see why a leg was or wasn't trusted, and why the next call did or
+    didn't fire. stderr, same as the request log below, never stdout."""
+    print(f"  [chain] {msg}", file=sys.stderr, flush=True)
+
+
 def build_request(shop: dict, body: dict) -> dict:
     """The request dict the existing CLI path already understands."""
     products = [p["name"] for p in (body.get("products") or []) if str(p.get("name") or "").strip()]
@@ -516,7 +524,11 @@ def _next_chain_requests(request: dict, result: dict, shop: dict, conn) -> list[
     if call_type == "inventory":
         low = [p["name"] for p in structured.get("products", []) if p.get("running_low")]
         if not low:
+            _log(f"{shop['id']}/inventory ({result.get('call_id')}): nothing running low, "
+                f"no reorder-offer callback")
             return []
+        _log(f"{shop['id']}/inventory ({result.get('call_id')}): running low: "
+            f"{', '.join(low)} -> calling {shop['id']} back to offer a reorder")
         return [{
             "call_type": "reorder_offer", "phone": shop["phone_e164"],
             "region": shop["region"], "locale": shop["locale"],
@@ -528,6 +540,8 @@ def _next_chain_requests(request: dict, result: dict, shop: dict, conn) -> list[
 
     if call_type == "reorder_offer":
         if not structured.get("owner_wants_to_order"):
+            _log(f"{shop['id']}/reorder_offer ({result.get('call_id')}): owner declined, "
+                f"no vendor called")
             return []
         items = structured.get("items") or []
         request_id = f"restock-{result['call_id']}"
@@ -540,11 +554,16 @@ def _next_chain_requests(request: dict, result: dict, shop: dict, conn) -> list[
         for vendor_name, vendor_items in by_vendor.items():
             vendor = store.find_vendor_by_name(conn, shop_id=shop["id"], name=vendor_name)
             if not vendor or not vendor["phone_e164"]:
-                continue  # never invent a vendor phone number — skip, don't guess
+                # never invent a vendor phone number — skip, don't guess
+                _log(f"{shop['id']}/reorder_offer: owner named {vendor_name!r} but no phone "
+                    f"is on file — not calling")
+                continue
             with conn:
                 order_id = store.create_order(
                     conn, request_id=request_id, shop_id=shop["id"],
                     vendor_id=vendor["vendor_id"], now=_now())
+            _log(f"{shop['id']}/reorder_offer: owner said yes -> calling vendor "
+                f"{vendor_name!r} to place order {order_id}")
             out.append({
                 "call_type": "vendor_order", "phone": vendor["phone_e164"],
                 # Same region/locale as the shop — the account is scoped to one
@@ -566,7 +585,11 @@ def _next_chain_requests(request: dict, result: dict, shop: dict, conn) -> list[
     if call_type == "vendor_order":
         order_id = result.get("metadata", {}).get("order_id")
         if not order_id:
+            _log(f"{shop['id']}/vendor_order ({result.get('call_id')}): no order_id in "
+                f"metadata — cannot call the owner back about an order we can't identify")
             return []
+        _log(f"{shop['id']}/vendor_order: order {order_id} done -> calling {shop['id']} "
+            f"back with the status")
         return [{
             "call_type": "order_status", "phone": shop["phone_e164"],
             "region": shop["region"], "locale": shop["locale"],
@@ -659,6 +682,10 @@ def _persist(key: str, result: dict, request: dict) -> "ingest.IngestResult":
         verdict = ingest.ingest_call(conn, result)
     finally:
         conn.close()
+    score = (result.get("completion_confidence") or {}).get("score")
+    score_text = f"{score:.2f}" if isinstance(score, (int, float)) else "missing"
+    _log(f"{request.get('shop_id')}/{request.get('call_type')} ({call_id}): "
+        f"confidence {score_text} vs {ingest.CONFIDENCE_THRESHOLD:.2f} threshold -> {verdict}")
     # `done` is set by the caller, once the chain decision below has also
     # landed — otherwise a poll could see this leg as finished with
     # next_keys still empty, half a second before the next call is queued.
@@ -677,6 +704,8 @@ def _maybe_continue_chain(key: str, request: dict, result: dict, call_date: str,
     auto-retries a failed leg.
     """
     if not accepted:
+        _log(f"{request.get('shop_id')}/{request.get('call_type')}: result not accepted "
+            f"(see confidence line above) — chain stops here, nothing auto-fires")
         return
     with RUNS_LOCK:
         chain_id = RUNS.get(key, {}).get("chain_id", key)
