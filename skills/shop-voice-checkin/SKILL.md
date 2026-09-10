@@ -95,8 +95,8 @@ under {{max_minutes}} minutes. Do not give financial advice.
 ## Call task template (reorder offer)
 
 ```text
-Call the consenting shop owner. Tell them {{low_stock_items}} are running low
-and ask if they want to place a restock order. If yes, ask quantity needed per
+Call the consenting shop owner. Tell them the following is running low:
+{{low_stock_items}}. Ask if they want to place a restock order. If yes, ask quantity needed per
 item and which vendor to use — name, what the vendor sells, and phone number
 if known (reuse a saved vendor if they name one already on file). If no, end
 politely; do not place any vendor call. Never invent a vendor phone number.

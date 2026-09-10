@@ -35,9 +35,13 @@ function chainTone(run){
   return "waiting";
 }
 
+/* Short label for the "now" line above the phase strip — a headline, not
+   the explanation. The full error (CALL-E's own message, which can be a
+   sentence) belongs in the result box below, styled as a callout, not
+   stretched across the header where it reads like a crash dump. */
 function chainStatusText(run){
   if(!run) return "Waiting to start";
-  if(run.phase === "failed") return run.error || "Failed";
+  if(run.phase === "failed") return "Not placed";
   if(run.done) return "Completed";
   return {queued: "Queued", ringing: "Ringing", in_progress: "On the call"}[run.phase]
     || run.phase || "Queued";

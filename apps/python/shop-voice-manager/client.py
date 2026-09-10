@@ -74,9 +74,11 @@ def build_task(request: dict) -> str:
             f"{disclose} Keep under {minutes} minutes. Do not give financial advice."
         )
     if call_type == "reorder_offer":
-        items = ", ".join(request.get("low_stock_items", ["the items running low"]))
+        low_stock = request.get("low_stock_items") or ["the items running low"]
+        items = ", ".join(low_stock)
+        verb = "is" if len(low_stock) == 1 else "are"
         return (
-            f"Call the consenting shop owner at {shop}. Use {tone}. Tell them {items} are "
+            f"Call the consenting shop owner at {shop}. Use {tone}. Tell them {items} {verb} "
             f"running low and ask if they want to place a restock order. If yes, ask quantity "
             f"needed per item and which vendor to use — name, what the vendor sells, and phone "
             f"number if known (reuse a saved vendor if they name one already on file). If no, "

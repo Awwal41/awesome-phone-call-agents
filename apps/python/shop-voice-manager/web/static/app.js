@@ -9,6 +9,11 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;
 const digits = s => String(s).replace(/[^\d]/g, "");
 const mask = v => { const d = digits(v); return d.length < 7 ? String(v) : "+" + d.slice(0,5) + "****" + d.slice(-2); };
 const mmss = s => Math.floor(s/60) + ":" + String(Math.floor(s%60)).padStart(2,"0");
+/* The styled error box used wherever a call could not be placed — CALL-E's
+   own rejection text (e.g. an unsupported region/language pair) can run to
+   a full sentence, so it gets a callout instead of a bare colored span. */
+const errorCallout = message =>
+  '<div class="warnline" style="display:block">' + esc(message) + "</div>";
 const CHEV = '<svg class="chev" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -707,7 +712,7 @@ function renderCallLive(){
       + '<span class="clock num" id="clock">0:00</span></div>'
     + '<div class="phases" id="phases" style="padding:0 0 6px"></div>'
     + '<div id="chainTrail"></div>'
-    + '<p class="note" id="resultBody" style="margin:10px 0 0"></p>';
+    + '<div class="note" id="resultBody" style="margin:10px 0 0"></div>';
   $("mFoot").innerHTML =
       '<span class="fineprint">Leaving this open is not required, the call runs on the server.</span>'
     + '<span class="spacer"></span>'
@@ -732,9 +737,10 @@ async function startCall(){
   }catch(e){
     $("beacon").className = "beacon failed";
     renderPhases("failed");
-    $("statusNow").textContent = "Refused";
+    $("statusNow").textContent = "Not placed";
     $("statusSub").textContent = "";
-    $("resultBody").innerHTML = '<span style="color:var(--attn)">' + esc(e.message) + "</span>";
+    $("resultBody").innerHTML = errorCallout(e.message);
+    // renderCallLive() already wired mFoot's Close button; nothing else to do.
   }
 }
 
@@ -786,7 +792,7 @@ function watch(key, shop){
       render();                       // land the final row behind the dialog
       const cid = (run.result && run.result.call_id) || run.call_id;
       if(run.error){
-        $("resultBody").innerHTML = '<span style="color:var(--attn)">' + esc(run.error) + "</span>";
+        $("resultBody").innerHTML = errorCallout(run.error);
       }else{
         $("resultBody").innerHTML = esc((run.result && run.result.verdict) || "Done")
           + (cid ? ' <a href="#/call/' + encodeURIComponent(cid)

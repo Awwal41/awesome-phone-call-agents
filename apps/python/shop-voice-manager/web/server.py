@@ -47,6 +47,20 @@ import store             # noqa: E402
 DB_PATH = Path(os.environ.get("SHOPVOICE_DB", APP_ROOT / "shop.db"))
 RESULTS_DIR = Path(os.environ.get("SHOPVOICE_RESULTS", DB_PATH.parent / "call-results"))
 FIXTURES = APP_ROOT / "fixtures" / "calls"
+PROCUREMENT_FIXTURES = APP_ROOT / "fixtures" / "procurement"
+
+# Demo mode's fixed script for the auto-chain: which fixture stands in for
+# each leg. inventory-low-stock.json always shows something running low, so
+# a demo inventory call always has something to chain into — the ordinary
+# demo path (fixtures/calls/) has no such guarantee and isn't written for
+# this shop. Anything without an entry here (sales, onboarding) falls back
+# to the newest same-call_type fixture, same as before this map existed.
+DEMO_CHAIN_FIXTURE = {
+    "inventory": PROCUREMENT_FIXTURES / "inventory-low-stock.json",
+    "reorder_offer": PROCUREMENT_FIXTURES / "reorder-offer-yes.json",
+    "vendor_order": PROCUREMENT_FIXTURES / "vendor-order-result.json",
+    "order_status": PROCUREMENT_FIXTURES / "order-status-result.json",
+}
 DEMO = os.environ.get("SHOPVOICE_DEMO") == "1"
 
 # Region support is a property of the CALL-E account, so it is configuration.
@@ -710,16 +724,35 @@ def _live_run(key: str, request: dict, call_date: str, api_key: str, attempt: in
         _set(key, done=True, phase="failed", error=str(exc))
 
 
-def _demo_run(key: str, request: dict, call_date: str, _api_key, attempt: int = 1):
-    """Replay the newest stored call at wall-clock speed. No call is placed."""
-    source = None
+def _demo_fixture_for(request: dict) -> dict | None:
+    """The fixture to replay for this leg. See DEMO_CHAIN_FIXTURE above."""
+    dedicated = DEMO_CHAIN_FIXTURE.get(request["call_type"])
+    if dedicated and dedicated.is_file():
+        try:
+            return json.loads(dedicated.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
+    # No dedicated fixture for this call_type (sales, onboarding, ...) —
+    # fall back to the newest fixture that actually matches, rather than the
+    # newest fixture full stop, which could silently replay the wrong type.
     for path in sorted(RESULTS_DIR.glob("*.json"), reverse=True) + \
                 sorted(FIXTURES.glob("*.json"), reverse=True):
         try:
-            source = json.loads(path.read_text(encoding="utf-8"))
-            break
+            payload = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
+        if payload.get("metadata", {}).get("call_type") == request["call_type"]:
+            return payload
+    return None
+
+
+def _demo_run(key: str, request: dict, call_date: str, api_key, attempt: int = 1):
+    """Replay a stored call at wall-clock speed. No CALL-E call is placed —
+    but the result is ingested through the same path a live result would be,
+    including the chain decision, so SHOPVOICE_DEMO=1 rehearses the whole
+    auto-chain (vendor lookup, order creation, every leg) for free before
+    testing it live. See DEMO_CHAIN_FIXTURE."""
+    source = _demo_fixture_for(request)
     if source is None:
         _set(key, done=True, phase="failed", error="No stored call to replay.")
         return
@@ -733,9 +766,25 @@ def _demo_run(key: str, request: dict, call_date: str, _api_key, attempt: int = 
             break
         _set(key, elapsed=round(elapsed, 1), phase="in_progress", status="in_progress")
         time.sleep(0.5)
-    _set(key, done=True, phase="completed", status="completed",
-         call_id=source.get("call_id"),
-         result={"verdict": "demo replay, nothing written", "call_id": source.get("call_id")})
+
+    # The fixture was written for a fictional shop and, for vendor_order /
+    # order_status, a fictional order_id. Rebind both to this run so the
+    # replay attaches to whichever shop is actually being tested and to the
+    # order _next_chain_requests actually opened, not the fixture's own.
+    result = dict(source)
+    result["call_id"] = f"demo-{key}"
+    result["metadata"] = {**source.get("metadata", {}), "shop_id": request["shop_id"],
+                          "call_type": request["call_type"], "call_date": call_date}
+    if request.get("request_id"):
+        result["metadata"]["order_id"] = request["request_id"]
+        structured = dict(source.get("structured_result") or {})
+        if "order_id" in structured:
+            structured["order_id"] = request["request_id"]
+        result["structured_result"] = structured
+
+    verdict = _persist(key, result, request)
+    _maybe_continue_chain(key, request, result, call_date, api_key, verdict.accepted)
+    _set(key, done=True)
 
 
 def run_status(key: str) -> dict:
