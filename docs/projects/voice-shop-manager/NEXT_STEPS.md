@@ -46,12 +46,12 @@ Later the owner can say only *"call Mama Sikiru for the fish"* because the direc
 | # | Issue | Task | Owner label |
 | --- | --- | --- | --- |
 | P1 | [#33](https://github.com/Awwal41/awesome-phone-call-agents/issues/33) | Vendor directory schema in SQLite | **Done** — schema v2 + store helpers |
-| P2 | [#34](https://github.com/Awwal41/awesome-phone-call-agents/issues/34) | Reorder offer after low-stock inventory | Todo → Aranwa |
-| P3 | [#35](https://github.com/Awwal41/awesome-phone-call-agents/issues/35) | Capture and save vendor details | Todo → Aranwa |
-| P4 | [#29](https://github.com/Awwal41/awesome-phone-call-agents/issues/29) | Outbound restock call to vendor | Todo → Aranwa |
-| P5 | [#36](https://github.com/Awwal41/awesome-phone-call-agents/issues/36) | Status callback to shop owner | Todo → Aranwa |
-| P6 | [#30](https://github.com/Awwal41/awesome-phone-call-agents/issues/30) | New-user onboarding → shop profile in DB | Todo → Aranwa |
-| P7 | [#31](https://github.com/Awwal41/awesome-phone-call-agents/issues/31) | Fixtures + integration test for the chain | Todo → Aranwa |
+| P2 | [#34](https://github.com/Awwal41/awesome-phone-call-agents/issues/34) | Reorder offer after low-stock inventory | **Done** |
+| P3 | [#35](https://github.com/Awwal41/awesome-phone-call-agents/issues/35) | Capture and save vendor details | **Done** |
+| P4 | [#29](https://github.com/Awwal41/awesome-phone-call-agents/issues/29) | Outbound restock call to vendor | **Done** |
+| P5 | [#36](https://github.com/Awwal41/awesome-phone-call-agents/issues/36) | Status callback to shop owner | **Done** |
+| P6 | [#30](https://github.com/Awwal41/awesome-phone-call-agents/issues/30) | New-user onboarding → shop profile in DB | **Done** |
+| P7 | [#31](https://github.com/Awwal41/awesome-phone-call-agents/issues/31) | Fixtures + integration test for the chain | **Done** |
 | P8 | [#32](https://github.com/Awwal41/awesome-phone-call-agents/issues/32) | Safety + skill docs for multi-party calls | **Done** |
 
 Suggested remaining order for Aranwa: **P2 + P3** → **P6** → **P4** → **P5** → **P7**.
@@ -100,13 +100,13 @@ Idempotency: `shopvoice-{shop_id}-vendor_pay-{intent_id}`.
 
 Demo path (no network): link a fake `payee_ref` → create intent from order → approve from fixture → `payments.submit_payment` with live flags for local fake transfer (still no bank API).
 
-## Still open from Phase 1
+## Phase 1 follow-ups
 
-| Issue | Task |
-| --- | --- |
-| [#15](https://github.com/Awwal41/awesome-phone-call-agents/issues/15) | R5 — live CALL-E SDK path (needed before live P4/P5) |
-| [#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21) | AR5 — India locale |
-| [#9](https://github.com/Awwal41/awesome-phone-call-agents/issues/9) | A9 — upstream PR |
-| [#11](https://github.com/Awwal41/awesome-phone-call-agents/issues/11) | R1 — confirm schema (may close after P1 review) |
+| Issue | Task | Status |
+| --- | --- | --- |
+| [#15](https://github.com/Awwal41/awesome-phone-call-agents/issues/15) | R5 — live CALL-E SDK path | **Done** |
+| [#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21) | AR5 — India locale (Hinglish scripts + INR profile) | **Done** |
+| [#9](https://github.com/Awwal41/awesome-phone-call-agents/issues/9) | A9 — upstream PR | Open when submitting |
+| [#11](https://github.com/Awwal41/awesome-phone-call-agents/issues/11) | R1 — confirm schema | **Done** |
 
 Filter: https://github.com/Awwal41/awesome-phone-call-agents/issues?q=label%3Avoice-shop-manager

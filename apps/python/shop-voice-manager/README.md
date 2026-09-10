@@ -27,6 +27,7 @@ cd apps/python/shop-voice-manager
 python client.py --request example_request.json
 python client.py --request example_request_sales.json
 python client.py --request example_request.json --weekly-summary
+python client.py --request example_request_inr.json   # India / INR preview
 ```
 
 Expected: masked preview plan + fixture structured result. No network.

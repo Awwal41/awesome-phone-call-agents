@@ -48,7 +48,12 @@ def schema_path(call_type: str) -> Path:
 def build_task(request: dict) -> str:
     shop = request.get("shop_id", "the shop")
     style = request.get("language_style", "english")
-    tone = "Pidgin-influenced English" if style == "pidgin-english" else "plain English"
+    if style == "pidgin-english":
+        tone = "Pidgin-influenced English"
+    elif style == "hindi-english":
+        tone = "Hindi-English (Hinglish) mix"
+    else:
+        tone = "plain English"
     minutes = request.get("max_minutes", 4)
     disclose = "Disclose you are an AI shop manager assistant."
     call_type = request["call_type"]

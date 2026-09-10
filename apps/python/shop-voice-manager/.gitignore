@@ -7,6 +7,7 @@ __pycache__/
 
 # Rendered weekly summaries (summarize.py --format html)
 *.html
+!web/static/index.html
 
 # Live call inputs: a real phone number and a consent record. Keep them out of
 # the repo entirely; the convention is documented in README.md.

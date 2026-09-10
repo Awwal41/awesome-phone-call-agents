@@ -132,7 +132,7 @@ Use the **committed schemas** as the source of truth, not the tables in
 `last_purchase_price_ngn`, while the committed schemas correctly use
 currency-neutral `estimated_revenue` and `last_purchase_price` plus a separate
 `currency` field. The currency-neutral names are right — NGN-suffixed keys would
-fork the schema for the India variant (#21).
+fork the schema for the India variant (now shipped as #21 / AR5).
 
 ## Envelope note — reconcile against a real response
 

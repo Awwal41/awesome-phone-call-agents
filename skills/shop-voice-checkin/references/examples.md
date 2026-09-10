@@ -75,6 +75,19 @@ Wait ~60 seconds before first poll, then every 5–10 seconds until terminal sta
 | Refused consent on call | Stop; do not retry |
 | Low-confidence structured result | Do not write to ledger; flag for human review |
 
+## India pilot (INR)
+
+Use `assets/sample-shop-profile-inr.json` and
+`assets/example-request-inr.template.json` with Hinglish task text from
+`references/call-scripts-hindi-english.md`:
+
+```bash
+cd apps/python/shop-voice-manager
+python client.py --request example_request_inr.json
+```
+
+Expected: masked preview for `demo-pune-corner-shop` (`region: IN`, `currency: INR`). No network.
+
 ## Weekly summary (local app, no call)
 
 After several days of stored check-ins, the app may print:
@@ -84,4 +97,4 @@ This week you sold about ₦425,000. You spent about ₦310,000 restocking.
 Products running low: Indomie, Sugar.
 ```
 
-See `apps/python/shop-voice-manager/` once Rajput and Aranwa land the runnable app.
+See `apps/python/shop-voice-manager/` for the runnable demo app.

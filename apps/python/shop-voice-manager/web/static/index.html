@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Shop Check-In console: customers, call history, and live status.">
+  <title>Shop Check-In</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Caveat:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-in">
+      <a class="wordmark" href="#/customers"><span class="mark" aria-hidden="true"></span>Shop Check-In</a>
+      <nav class="nav" id="nav" aria-label="Primary">
+        <a href="#/customers" data-nav="customers">Customers</a>
+        <a href="#/schedule" data-nav="schedule">Schedule</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="view" class="wrap">
+    <p class="loading">Loading</p>
+  </main>
+
+  <dialog class="modal" id="callModal" aria-labelledby="mTitle">
+    <div class="modal-head">
+      <div class="grow">
+        <h2 id="mTitle">Call</h2>
+        <p id="mSub"></p>
+      </div>
+      <button class="modal-x" id="mX" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body scroller" id="mBody"></div>
+    <div class="modal-foot" id="mFoot"></div>
+  </dialog>
+
+  <datalist id="unitList"></datalist>
+</body>
+</html>

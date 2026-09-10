@@ -75,7 +75,7 @@ UNITS = [u.strip() for u in os.environ.get(
 VOICES = [
     {"id": "english",        "name": "English",         "locale": "en", "style": "english"},
     {"id": "pidgin-english", "name": "Nigerian Pidgin", "locale": "en", "style": "pidgin-english"},
-    {"id": "hindi",          "name": "Hindi",           "locale": "hi", "style": "english"},
+    {"id": "hindi",          "name": "Hindi",           "locale": "hi", "style": "hindi-english"},
 ]
 VOICE_BY_ID = {v["id"]: v for v in VOICES}
 

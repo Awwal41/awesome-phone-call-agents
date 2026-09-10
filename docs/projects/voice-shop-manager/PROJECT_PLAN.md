@@ -32,7 +32,7 @@ validation and tests with no credentials, no network, and no calls.
 | Awwal tasks (demo scope) | **10 / 10** | A9 upstream PR | Awwal |
 | Agent skill | Complete (MVP) | Phase 2 scripts + safety (P2, P5, P8) | Awwal |
 | Python app | Ledger + ingest + live path (R4–R6) | Vendor schema + vendor dial (P1, P4) | Rajput |
-| Insights, tests, docs | **7 / 8** (AR2–AR4, AR6–AR8) | India locale (AR5); P6/P7 | Aranwa |
+| Insights, tests, docs | **8 / 8** (AR2–AR8) | — | Aranwa |
 | Shared (S1–S4) | **4 / 4** | — | All |
 | Phase 2 procurement (P1–P8) | **2 / 8** (P1, P8) | P2–P7 → Aranwa | Team |
 | Phase 3 payouts (P9–P12) | **4 / 4** | Real bank rail (post-hackathon) | Awwal |
@@ -87,7 +87,7 @@ Ordered by value.
 - [ ] **Phase 2 procurement loop** ([NEXT_STEPS.md](./NEXT_STEPS.md), issues [#33](https://github.com/Awwal41/awesome-phone-call-agents/issues/33)–[#36](https://github.com/Awwal41/awesome-phone-call-agents/issues/36), [#29](https://github.com/Awwal41/awesome-phone-call-agents/issues/29)–[#32](https://github.com/Awwal41/awesome-phone-call-agents/issues/32)). Low stock → ask to order → save vendors → call vendors → owner status callback; plus new-user onboarding.
 - [x] **Phase 3 vendor payouts (foundation)** ([NEXT_STEPS.md](./NEXT_STEPS.md), issues [#37](https://github.com/Awwal41/awesome-phone-call-agents/issues/37)–[#40](https://github.com/Awwal41/awesome-phone-call-agents/issues/40)). Schema v3 + fake adapter + consent schema + tests. Real bank rail later.
 - [ ] **R5 — live CALL-E SDK path** ([#15](https://github.com/Awwal41/awesome-phone-call-agents/issues/15)). Required before live P4/P5 dials.
-- [ ] **AR5 — India locale** ([#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21)). Not started. Only NG/NGN profiles exist.
+- [x] **AR5 — India locale** ([#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21)). Hinglish scripts + INR shop profiles.
 - [ ] **A9 — upstream PR** ([#9](https://github.com/Awwal41/awesome-phone-call-agents/issues/9)).
 
 > **Before the upstream PR:** decide whether `docs/projects/voice-shop-manager/`
@@ -692,7 +692,7 @@ Rajput and Aranwa: ask Awwal to add you as a **collaborator** on `Awwal41/awesom
 | AR2 | [#18](https://github.com/Awwal41/awesome-phone-call-agents/issues/18) | Implement `summarize.py` weekly insights | **Done** — computed from the ledger, two dead-stock methods |
 | AR3 | [#19](https://github.com/Awwal41/awesome-phone-call-agents/issues/19) | Add pytest + fixtures (no live calls in CI) | **Done** — 42 tests, incl. a test that asserts no test can place a call |
 | AR4 | [#20](https://github.com/Awwal41/awesome-phone-call-agents/issues/20) | Scheduler recipe doc (morning/evening cron + Windows Task Scheduler) | **Done** — `references/scheduling.md` + `render_schedule.py` |
-| AR5 | [#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21) | India locale: Hindi-English scripts + INR shop profile | Todo — only NG/NGN profiles exist |
+| AR5 | [#21](https://github.com/Awwal41/awesome-phone-call-agents/issues/21) | India locale: Hindi-English scripts + INR shop profile | **Done** — `call-scripts-hindi-english.md` + INR profiles |
 | AR6 | [#22](https://github.com/Awwal41/awesome-phone-call-agents/issues/22) | Extend app README (demo README exists) | **Done** — needs a refresh (stale test count, stale stand-in note) |
 | AR7 | [#23](https://github.com/Awwal41/awesome-phone-call-agents/issues/23) | CLI report formatter — pretty terminal output | **Done** — `--format text\|json` in `summarize.py` |
 | AR8 | [#24](https://github.com/Awwal41/awesome-phone-call-agents/issues/24) | Run `python3 scripts/validate_repository.py` before PR | **Done** — automated in `check.sh` + pre-push hook |
@@ -711,12 +711,12 @@ Rajput and Aranwa: ask Awwal to add you as a **collaborator** on `Awwal41/awesom
 | # | Issue | Task | Status |
 | --- | --- | --- | --- |
 | P1 | [#33](https://github.com/Awwal41/awesome-phone-call-agents/issues/33) | Vendor directory schema in SQLite | **Done** — schema v2 + store helpers |
-| P2 | [#34](https://github.com/Awwal41/awesome-phone-call-agents/issues/34) | Reorder offer after low-stock inventory | Todo — assigned Aranwa |
-| P3 | [#35](https://github.com/Awwal41/awesome-phone-call-agents/issues/35) | Capture and save vendor details | Todo — assigned Aranwa |
-| P4 | [#29](https://github.com/Awwal41/awesome-phone-call-agents/issues/29) | Outbound restock call to vendor | Todo — assigned Aranwa |
-| P5 | [#36](https://github.com/Awwal41/awesome-phone-call-agents/issues/36) | Status callback to shop owner | Todo — assigned Aranwa |
-| P6 | [#30](https://github.com/Awwal41/awesome-phone-call-agents/issues/30) | New-user onboarding → shop profile in DB | Todo — assigned Aranwa |
-| P7 | [#31](https://github.com/Awwal41/awesome-phone-call-agents/issues/31) | Fixtures + integration test for procurement chain | Todo — assigned Aranwa |
+| P2 | [#34](https://github.com/Awwal41/awesome-phone-call-agents/issues/34) | Reorder offer after low-stock inventory | **Done** |
+| P3 | [#35](https://github.com/Awwal41/awesome-phone-call-agents/issues/35) | Capture and save vendor details | **Done** |
+| P4 | [#29](https://github.com/Awwal41/awesome-phone-call-agents/issues/29) | Outbound restock call to vendor | **Done** |
+| P5 | [#36](https://github.com/Awwal41/awesome-phone-call-agents/issues/36) | Status callback to shop owner | **Done** |
+| P6 | [#30](https://github.com/Awwal41/awesome-phone-call-agents/issues/30) | New-user onboarding → shop profile in DB | **Done** |
+| P7 | [#31](https://github.com/Awwal41/awesome-phone-call-agents/issues/31) | Fixtures + integration test for procurement chain | **Done** |
 | P8 | [#32](https://github.com/Awwal41/awesome-phone-call-agents/issues/32) | Safety + skill docs for multi-party calls | **Done** |
 
 ### Phase 3 — vendor payouts (Awwal)

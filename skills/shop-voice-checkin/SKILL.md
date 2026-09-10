@@ -6,7 +6,7 @@ license: MIT
 
 # Shop Voice Check-in
 
-Use this skill when a **shop owner has opted in** to regular phone check-ins instead of entering data into an app. The agent calls, speaks in simple English or Pidgin-influenced English, asks about stock and sales, and returns **structured JSON** for a local shop ledger.
+Use this skill when a **shop owner has opted in** to regular phone check-ins instead of entering data into an app. The agent calls, speaks in simple English, Pidgin-influenced English, or Hindi-English (Hinglish), asks about stock and sales, and returns **structured JSON** for a local shop ledger.
 
 This skill is the voice layer of **Voice Shop Manager** — "your business manager, on the phone."
 
@@ -42,7 +42,7 @@ For each call, require:
 Optional:
 
 - `currency` — `NGN`, `INR`, etc.
-- `language_style` — `pidgin-english` or `english`
+- `language_style` — `pidgin-english`, `english`, or `hindi-english`
 - `products_to_ask` — short list for morning check-ins
 - `timezone` — IANA name for scheduling context
 
@@ -52,7 +52,7 @@ Ask for any missing required field. Do not infer phone, region, locale, or timez
 
 1. Read `references/safety.md` and confirm **recipient consent**.
 2. Choose call type: inventory (morning) or sales (evening).
-3. Build task text from `references/call-scripts-pidgin.md` or `references/call-scripts-english.md`.
+3. Build task text from `references/call-scripts-pidgin.md`, `references/call-scripts-english.md`, or `references/call-scripts-hindi-english.md`.
 4. Attach the matching result schema:
    - inventory → `references/result-schema-inventory.json`
    - sales → `references/result-schema-sales.json`
@@ -73,13 +73,14 @@ consent check -> build task + schema -> preview -> live call -> structured resul
 ## Call task template (inventory)
 
 ```text
-Call the shop owner for a short morning inventory check-in. Use simple English
-with Nigerian Pidgin phrases where natural. Ask about: {{products_to_ask}}.
-For each product, capture approximate quantity and unit. Ask what is running low.
-Also ask once whether they added any new goods not on that list; if yes, capture
-name, quantity, and unit so the ledger can add them. Disclose you are an AI
-assistant for their shop manager service. Keep the call under {{max_minutes}}
-minutes. Do not give financial advice.
+Call the shop owner for a short morning inventory check-in. Match language_style:
+Pidgin for pidgin-english, plain English for english, Hindi-English mix for
+hindi-english. Ask about: {{products_to_ask}}. For each product, capture
+approximate quantity and unit. Ask what is running low. Also ask once whether
+they added any new goods not on that list; if yes, capture name, quantity, and
+unit so the ledger can add them. Disclose you are an AI assistant for their shop
+manager service. Keep the call under {{max_minutes}} minutes. Do not give
+financial advice.
 ```
 
 ## Call task template (sales)
@@ -158,8 +159,10 @@ The reference runner lives at `apps/python/shop-voice-manager/`. Default mode is
 
 ## Assets
 
-- `assets/sample-shop-profile.json` — fictional masked shop profile
-- `assets/example-request.template.json` — request shape for the Python app
+- `assets/sample-shop-profile.json` — fictional masked Nigeria (NGN) shop profile
+- `assets/sample-shop-profile-inr.json` — fictional masked India (INR) shop profile
+- `assets/example-request.template.json` — Nigeria request shape for the Python app
+- `assets/example-request-inr.template.json` — India request shape (`region: IN`, `currency: INR`)
 
 ## Output
 

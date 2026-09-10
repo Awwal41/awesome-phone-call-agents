@@ -64,7 +64,8 @@ Use when the shop owner prefers standard English, or for India pilots (`region: 
 
 - Use `region: IN` and `locale: en` or `hi` per CALL-E supported languages.
 - Currency in results: `INR`.
-- Aranwa maintains a Hindi-English script variant separately (`AR5`).
+- For Hindi-English mix, use [`call-scripts-hindi-english.md`](./call-scripts-hindi-english.md)
+  with `language_style: hindi-english` (see `assets/sample-shop-profile-inr.json`).
 
 ## Tone rules
 
