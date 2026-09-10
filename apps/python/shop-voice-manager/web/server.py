@@ -121,6 +121,26 @@ CONFIG_KEYS = ("regions", "blocked", "currencies", "units", "locales", "styles")
 RUNS: dict[str, dict] = {}
 RUNS_LOCK = threading.Lock()
 
+# --------------------------------------------------------------------------
+# Phase 2 — procurement auto-chain
+#
+# Overrides the terminal-only rule in CLAUDE.md and the one-shot-per-call
+# design in docs/projects/voice-shop-manager/NEXT_STEPS.md: starting the
+# inventory check-in from this console is the *only* human action. If it
+# flags low stock, this fires the reorder-offer call itself; if the owner
+# says yes, it dials the named vendor itself; once the vendor answers, it
+# calls the owner back itself. Nobody reviews a plan or clicks between
+# those steps — see the decision recorded 2026-09-10.
+#
+# CHAIN_CAP exists because that override removes the human who would
+# otherwise notice a chain running away (e.g. a reorder call naming several
+# vendors, each opening its own vendor + callback pair). It is the only
+# remaining brake on the 20-call demo budget for an auto-fired chain.
+# --------------------------------------------------------------------------
+
+CHAIN_CAP = 10  # 1 trigger + at most 9 auto-fired calls, per chain
+CHAIN_COUNTS: dict[str, int] = {}
+
 
 class ApiError(Exception):
     def __init__(self, status: int, message: str):
@@ -468,6 +488,109 @@ def build_request(shop: dict, body: dict) -> dict:
     }
 
 
+def _next_chain_requests(request: dict, result: dict, shop: dict, conn) -> list[dict]:
+    """What to auto-fire next after `request` completed, or [] to stop here.
+
+    Each returned dict is a ready-to-launch request, same shape build_request
+    produces. Called with the shop's own vendor rows already written (ingest
+    ran in _persist before this), so a vendor named on the reorder-offer call
+    can be looked up by name.
+    """
+    call_type = request["call_type"]
+    structured = result.get("structured_result") or {}
+
+    if call_type == "inventory":
+        low = [p["name"] for p in structured.get("products", []) if p.get("running_low")]
+        if not low:
+            return []
+        return [{
+            "call_type": "reorder_offer", "phone": shop["phone_e164"],
+            "region": shop["region"], "locale": shop["locale"],
+            "currency": shop["currency"], "shop_id": shop["id"],
+            "recipient_consented": True,
+            "language_style": shop.get("language_style") or VOICES[0]["style"],
+            "low_stock_items": low, "max_minutes": 4,
+        }]
+
+    if call_type == "reorder_offer":
+        if not structured.get("owner_wants_to_order"):
+            return []
+        items = structured.get("items") or []
+        request_id = f"restock-{result['call_id']}"
+        by_vendor: dict[str, list[dict]] = {}
+        for item in items:
+            name = item.get("vendor_name")
+            if name:
+                by_vendor.setdefault(name, []).append(item)
+        out = []
+        for vendor_name, vendor_items in by_vendor.items():
+            vendor = store.find_vendor_by_name(conn, shop_id=shop["id"], name=vendor_name)
+            if not vendor or not vendor["phone_e164"]:
+                continue  # never invent a vendor phone number — skip, don't guess
+            with conn:
+                order_id = store.create_order(
+                    conn, request_id=request_id, shop_id=shop["id"],
+                    vendor_id=vendor["vendor_id"], now=_now())
+            out.append({
+                "call_type": "vendor_order", "phone": vendor["phone_e164"],
+                # Same region/locale as the shop — the account is scoped to one
+                # region for this deployment; a cross-border vendor is out of
+                # scope for the demo.
+                "region": shop["region"], "locale": shop["locale"],
+                "currency": shop["currency"], "shop_id": shop["id"],
+                "recipient_consented": True,
+                "vendor_display_name": vendor_name,
+                "order_items": [
+                    " ".join(str(x) for x in
+                             (i.get("quantity_needed"), i.get("unit"), i.get("name")) if x)
+                    for i in vendor_items
+                ],
+                "request_id": order_id, "max_minutes": 3,
+            })
+        return out
+
+    if call_type == "vendor_order":
+        order_id = result.get("metadata", {}).get("order_id")
+        if not order_id:
+            return []
+        return [{
+            "call_type": "order_status", "phone": shop["phone_e164"],
+            "region": shop["region"], "locale": shop["locale"],
+            "currency": shop["currency"], "shop_id": shop["id"],
+            "recipient_consented": True, "request_id": order_id, "max_minutes": 2,
+        }]
+
+    return []  # order_status is terminal; onboarding/sales never chain
+
+
+def _launch(request: dict, call_date: str, api_key: str, *,
+           attempt: int = 1, chain_id: str | None = None,
+           parent_key: str | None = None) -> str | None:
+    """Register a run and start it on its own thread. Returns the new key,
+    or None if the chain has hit CHAIN_CAP and this call was refused."""
+    key = uuid.uuid4().hex[:12]
+    root = chain_id or key
+    with RUNS_LOCK:
+        count = CHAIN_COUNTS.get(root, 0) + 1
+        if count > CHAIN_CAP:
+            return None
+        CHAIN_COUNTS[root] = count
+        RUNS[key] = {"key": key, "phase": "queued", "elapsed": 0.0, "status": "queued",
+                     "call_type": request["call_type"],
+                     "demo": DEMO, "shop_id": request["shop_id"], "started": time.time(),
+                     "masked_phone": live_call.mask_phone(request["phone"]),
+                     "attempt": attempt,
+                     "chain_id": root, "chain_position": count, "parent_key": parent_key,
+                     "next_keys": [],
+                     "call_id": None, "error": None, "done": False, "result": None}
+        if parent_key and parent_key in RUNS:
+            RUNS[parent_key]["next_keys"].append(key)
+    target = _demo_run if DEMO else _live_run
+    threading.Thread(target=target, args=(key, request, call_date, api_key, attempt),
+                     daemon=True).start()
+    return key
+
+
 def start_checkin(body: dict) -> dict:
     if not body.get("consent"):
         raise ApiError(400, "Consent must be recorded before a call can be placed.")
@@ -494,18 +617,13 @@ def start_checkin(body: dict) -> dict:
                                       request["call_type"], call_date)
                if body.get("again") else 1)
 
-    key = uuid.uuid4().hex[:12]
-    with RUNS_LOCK:
-        RUNS[key] = {"key": key, "phase": "queued", "elapsed": 0.0, "status": "queued",
-                     "call_type": request["call_type"],
-                     "demo": DEMO, "shop_id": shop["id"], "started": time.time(),
-                     "masked_phone": live_call.mask_phone(shop["phone_e164"]),
-                     "attempt": attempt,
-                     "call_id": None, "error": None, "done": False, "result": None}
-    target = _demo_run if DEMO else _live_run
-    threading.Thread(target=target, args=(key, request, call_date, api_key, attempt),
-                     daemon=True).start()
-    return {"key": key, "demo": DEMO, "attempt": attempt}
+    # This is the one human action in the whole chain (see CHAIN_CAP above):
+    # everything reorder_offer/vendor_order/order_status do after this is
+    # fired automatically, with no further confirmation.
+    key = _launch(request, call_date, api_key, attempt=attempt)
+    if key is None:  # unreachable for a fresh chain — CHAIN_CAP starts at 0
+        raise ApiError(500, "Could not start the chain.")
+    return {"key": key, "demo": DEMO, "attempt": attempt, "chain_id": key}
 
 
 def _set(key: str, **fields):
@@ -514,7 +632,7 @@ def _set(key: str, **fields):
             RUNS[key].update(fields)
 
 
-def _persist(key: str, result: dict, request: dict):
+def _persist(key: str, result: dict, request: dict) -> "ingest.IngestResult":
     call_id = result.get("call_id")
     if call_id:
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -527,8 +645,43 @@ def _persist(key: str, result: dict, request: dict):
         verdict = ingest.ingest_call(conn, result)
     finally:
         conn.close()
-    _set(key, done=True, phase="completed", status=result.get("status", "completed"),
+    # `done` is set by the caller, once the chain decision below has also
+    # landed — otherwise a poll could see this leg as finished with
+    # next_keys still empty, half a second before the next call is queued.
+    _set(key, phase="completed", status=result.get("status", "completed"),
          call_id=call_id, result={"verdict": str(verdict), "call_id": call_id})
+    return verdict
+
+
+def _maybe_continue_chain(key: str, request: dict, result: dict, call_date: str,
+                          api_key: str, accepted: bool) -> None:
+    """Fire the next call(s) in the Phase 2 chain, if this one calls for it.
+
+    Gated on `accepted`: a rejected result (declined, low confidence, no
+    answer) carries no trustworthy structured_result, so it must not drive
+    the next call — see ingest._decide. The chain simply stops there; nothing
+    auto-retries a failed leg.
+    """
+    if not accepted:
+        return
+    with RUNS_LOCK:
+        chain_id = RUNS.get(key, {}).get("chain_id", key)
+    conn = _conn()
+    try:
+        rows = _rows(conn, "SELECT * FROM shops WHERE id = ?", (request["shop_id"],))
+        if not rows:
+            return
+        next_requests = _next_chain_requests(request, result, rows[0], conn)
+    finally:
+        conn.close()
+    capped = False
+    for next_request in next_requests:
+        new_key = _launch(next_request, call_date, api_key,
+                          chain_id=chain_id, parent_key=key)
+        if new_key is None:
+            capped = True
+    if capped:
+        _set(key, chain_capped=True)
 
 
 def _live_run(key: str, request: dict, call_date: str, api_key: str, attempt: int = 1):
@@ -546,9 +699,12 @@ def _live_run(key: str, request: dict, call_date: str, api_key: str, attempt: in
             provider_hash=live_call.provider_account_hash(api_key),
             call_date=call_date,
             attempt=attempt,
+            request_id=request.get("request_id"),
             progress=progress,
         )
-        _persist(key, result, request)
+        verdict = _persist(key, result, request)
+        _maybe_continue_chain(key, request, result, call_date, api_key, verdict.accepted)
+        _set(key, done=True)
     except Exception as exc:                       # surfaced to the operator
         traceback.print_exc()
         _set(key, done=True, phase="failed", error=str(exc))
@@ -663,6 +819,8 @@ class Handler(BaseHTTPRequestHandler):
                     "outcome": "running", "phase": r.get("phase"),
                     "elapsed": r.get("elapsed", 0),
                     "accepted": 0, "confidence": None, "products": [], "low": 0,
+                    "chain_id": r.get("chain_id"), "chain_position": r.get("chain_position"),
+                    "parent_key": r.get("parent_key"), "next_keys": r.get("next_keys", []),
                 } for r in live]
                 unrecorded = [
                     {**a, "accepted": 0, "confidence": None, "products": [], "low": 0,

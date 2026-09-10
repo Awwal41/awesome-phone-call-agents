@@ -360,13 +360,15 @@ async function pageCustomer(id){
     // states what happened instead of pretending to be a record.
     if(c.outcome === "running"){
       const label = {queued:"Queued", ringing:"Ringing", in_progress:"On the call"}[c.phase] || "Running";
+      const chained = c.chain_position > 1
+        ? '<span class="chain-badge">Step ' + c.chain_position + " of chain</span>" : "";
       return '<div class="row" data-live="' + esc(c.key || "")
         + '" data-shop="' + esc(shop.id) + '">'
         + '<div class="row-main"><span class="row-title">' + niceDate(c.date) + "</span>"
-        + '<span class="row-sub">Call in progress</span></div>'
+        + '<span class="row-sub">Call in progress' + chained + "</span></div>"
         + '<div class="row-end">'
         + '<span class="chip ' + (c.call_type === "sales" ? "sal" : "inv") + '">'
-        + esc(c.call_type) + "</span>"
+        + esc(Chain.chainLabel(c.call_type)) + "</span>"
         + '<span class="chip live-chip">' + esc(label) + "</span>"
         + '<div class="row-stat"><span class="v num">' + mmss(c.elapsed || 0)
         + '</span><span class="k">Elapsed</span></div>' + CHEV + "</div></div>";
@@ -506,7 +508,7 @@ async function openLiveRun(key, shopId){
   let shop;
   try{ shop = await api("/customers/" + encodeURIComponent(shopId)); }
   catch(e){ return; }
-  $("mTitle").textContent = "Check-in call";
+  $("mTitle").textContent = "Call in progress";
   $("mSub").textContent = shop.display_name || shop.id;
   renderCallLive();
   if(!d.open) d.showModal();
@@ -704,6 +706,7 @@ function renderCallLive(){
       + '<span class="sub" id="statusSub">Sending the task to CALL-E</span></span>'
       + '<span class="clock num" id="clock">0:00</span></div>'
     + '<div class="phases" id="phases" style="padding:0 0 6px"></div>'
+    + '<div id="chainTrail"></div>'
     + '<p class="note" id="resultBody" style="margin:10px 0 0"></p>';
   $("mFoot").innerHTML =
       '<span class="fineprint">Leaving this open is not required, the call runs on the server.</span>'
@@ -735,13 +738,31 @@ async function startCall(){
   }
 }
 
+/* Tracks every leg the auto-chain fires from `key`, not just `key` itself.
+   Each tick re-fetches every leg discovered so far (Chain.discoverChain
+   follows next_keys as the server reports them), lets Chain pick which one
+   is "active", and renders that leg's phase strip plus a trail of the whole
+   chain underneath it — see chain.js. */
+let chainRuns = {};
+
 function watch(key, shop){
   clearInterval(poll);
+  chainRuns = {};
   poll = setInterval(async () => {
     if(!$("clock")){ clearInterval(poll); return; }
-    let run;
-    try{ run = await api("/checkins/" + key); }
-    catch(e){ clearInterval(poll); return; }
+
+    const order = Chain.discoverChain(chainRuns, key);
+    try{
+      const fetched = await Promise.all(order.map(k =>
+        (chainRuns[k] && chainRuns[k].done) ? chainRuns[k] : api("/checkins/" + k)));
+      order.forEach((k, i) => { chainRuns[k] = fetched[i]; });
+    }catch(e){ clearInterval(poll); return; }
+
+    const full = Chain.discoverChain(chainRuns, key);   // a fetch may have found new next_keys
+    const activeKey = Chain.activeLeg(full, chainRuns);
+    const run = chainRuns[activeKey];
+
+    $("mTitle").textContent = Chain.chainLabel(run.call_type);
     $("clock").textContent = mmss(run.elapsed || 0);
     renderPhases(run.phase);
     $("beacon").className = "beacon" + (
@@ -750,15 +771,16 @@ function watch(key, shop){
       : run.phase === "ringing"   ? " waiting"
       : run.phase === "queued"    ? " waiting"
       :                             " live");
-    $("statusNow").textContent = {queued:"Queued", ringing:"Ringing", in_progress:"On the call",
-      completed:"Completed", failed:"Failed"}[run.phase] || run.phase;
+    $("statusNow").textContent = Chain.chainStatusText(run);
     $("statusSub").textContent =
         run.phase === "ringing"   ? "Dialing " + run.masked_phone
       : run.phase === "failed"    ? ""
       : run.phase === "completed" ? "Call ended"
       : (shop.display_name || shop.id) + " on the line";
+    const trail = $("chainTrail");
+    if(trail) trail.innerHTML = Chain.renderTrail(full, chainRuns, activeKey, esc);
 
-    if(run.done){
+    if(Chain.allDone(full, chainRuns)){
       clearInterval(poll);
       clearInterval(bgTimer); bgTimer = null;
       render();                       // land the final row behind the dialog
@@ -769,6 +791,10 @@ function watch(key, shop){
         $("resultBody").innerHTML = esc((run.result && run.result.verdict) || "Done")
           + (cid ? ' <a href="#/call/' + encodeURIComponent(cid)
               + '" style="color:var(--accent-ink);font-weight:600">View details</a>' : "");
+      }
+      if(full.some(k => chainRuns[k] && chainRuns[k].chain_capped)){
+        $("resultBody").innerHTML += '<div class="warnline" style="display:block;margin-top:10px">'
+          + "Chain stopped at " + full.length + " calls (this session's cap).</div>";
       }
       $("mFoot").innerHTML = '<span class="spacer"></span>'
         + '<button class="btn" id="mClose" type="button">Done</button>';

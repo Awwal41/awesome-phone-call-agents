@@ -8,17 +8,49 @@ Voice-first check-ins for informal retailers: morning inventory and evening sale
 
 ## Setup
 
-Python 3.11 or newer. No API key is needed for the demo path.
+Python 3.11 or newer. The app itself needs nothing installed: `store.py`,
+`ingest.py`, `summarize.py` and the web server import only the standard
+library, so the demo and the console run on a clean checkout.
+
+Two things are optional, and only if you want them:
 
 ```bash
 cd apps/python/shop-voice-manager
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install pytest jsonschema    # only needed to run the tests
+python3 -m venv venv
+source venv/bin/activate            # Windows: venv\Scripts\activate
+
+pip install -r requirements-dev.txt  # pytest + jsonschema, to run the tests
+pip install "calle-ai>=0.1.0"        # the CALL-E SDK, only to place real calls
 ```
 
-Credentials, when live calls land (R5), come from the environment or a local
-`.env` — never from a committed file.
+`calle-ai` is declared as the `live` extra in `pyproject.toml`. It is not a
+dependency: `live_call.py` imports it lazily, so `--help`, the demo, the tests
+and the console all work without it. You only need it at the moment a call is
+actually placed.
+
+Credentials come from the environment, never from a committed file.
+
+## Run the console
+
+```bash
+cd apps/python/shop-voice-manager
+export CALLE_API_KEY=calle_live_...     # your key; omit to browse read only
+venv/bin/python web/server.py           # http://127.0.0.1:8765
+```
+
+Use the interpreter that has `calle-ai`, otherwise the call fails at dial time
+with "The CALL-E SDK is not installed". Startup prints which mode it is in:
+
+```text
+Shop Check-In console on http://127.0.0.1:8765
+  ledger  .../shop-voice-manager/shop.db
+  mode    live
+```
+
+`mode live` means it can dial. `read only` means `CALLE_API_KEY` is not set in
+that shell, and `export` only affects the terminal you ran it in. Add
+`SHOPVOICE_DEMO=1` to replay a stored call instead of dialling, or
+`SHOPVOICE_RELOAD=1` while editing so the server restarts itself.
 
 ## Quick start (demo — no CALL-E credits)
 
@@ -71,46 +103,22 @@ so a live call faces the identical confidence gate. See
 
 ## Web console
 
-A browser console over the same ledger: customers, per-shop call history, call
-detail with transcript, and live status while a call runs. Standard library
-only, so it adds no dependency and `dependencies = []` still holds.
+A browser console over the same ledger, for the person who runs the calls
+rather than the person who wrote them:
 
-```bash
-cd ~/Documents/Aranwaolu/Awwal/work/apps/python/shop-voice-manager
+- **Customers** — every shop, with how many calls landed and how many did not
+- **Shop** — details, usual products, and the full call history
+- **Call** — status, captured stock, evidence, transcript
+- **Place check-in call** — a dialog on the shop: pick the products, confirm the
+  cost, then watch the phases as it rings
 
-# browsing only: the server itself is standard library, so any python works
-python3 web/server.py         # http://127.0.0.1:8765
+See [Run the console](#run-the-console) above for how to start it. It is
+standard library only, so it adds no dependency and `dependencies = []` still
+holds.
 
-# to place calls: use the interpreter that has the CALL-E SDK, or the call
-# fails at dial time with "The CALL-E SDK is not installed"
-export CALLE_API_KEY=...
-venv/bin/python web/server.py
-```
-
-The console serves history and forms from the standard library alone, but
-placing a call imports `calle`. Start it with the interpreter that has the SDK
-and both paths work.
-
-While iterating, add `SHOPVOICE_RELOAD=1` and the server restarts itself when a
-source file changes:
-
-```bash
-SHOPVOICE_RELOAD=1 venv/bin/python web/server.py
-```
-
-Static files are read per request, so HTML, CSS and JS were always live. The
-lists it reads from the environment were not, which is what the reload fixes.
-It never restarts while a call is in flight, because run status lives in memory
-and losing it would leave you blind to a call that is still ringing.
-
-Without a key it starts read only and says so in a banner, so you can browse
-history without any risk of dialling. `SHOPVOICE_DEMO=1` replays a stored call
-instead of placing one, which is enough to rehearse the flow without spending
-credits.
-
-Everything is configuration, not code. Shops, phone numbers, products and
-currency live in the `shops` and `products` tables and are created through the
-UI, never hardcoded.
+Nothing about a shop is hardcoded. Shops, numbers, products, units and currency
+live in the ledger and are created through the UI. The lists it offers come
+from the environment:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -119,15 +127,18 @@ UI, never hardcoded.
 | `SHOPVOICE_HOST` | `127.0.0.1` | Bind address |
 | `SHOPVOICE_PORT` | `8765` | Port |
 | `SHOPVOICE_DEMO` | unset | `1` replays a stored call instead of dialling |
-| `SHOPVOICE_REGIONS` | `US,GB,CA,KE,...` | Regions offered in the UI |
-| `SHOPVOICE_BLOCKED_REGIONS` | `NG` | Refused before dialling, because CALL-E rejects them at creation |
+| `SHOPVOICE_RELOAD` | unset | `1` restarts the server when a source file changes |
+| `SHOPVOICE_REGIONS` | `NG,GH,KE,ZA,US,…` | Countries offered |
+| `SHOPVOICE_CURRENCIES` | `NGN,GHS,KES,…` | Currencies offered |
+| `SHOPVOICE_LOCALES` / `SHOPVOICE_STYLES` | English, Pidgin | What the owner hears |
+| `SHOPVOICE_UNITS` | bags, kegs, kg, … | Unit suggestions; the field is free text |
 
-Pressing **Start check-in** with a key set places a real call and spends a
-credit, exactly like `--execute` does. The consent box and the region gate both
-have to pass first.
+Pressing **Place check-in call** with a key set places a real call and spends a
+credit, exactly like `--execute`. The consent record and the product list both
+have to be in place first.
 
-`http.server` is fine for one operator on localhost. It is not hardened for the
-public internet, so do not bind it to `0.0.0.0` on a shared network.
+`http.server` is right for one operator on localhost. It is not hardened for
+the public internet, so do not bind it to `0.0.0.0` on a shared network.
 
 ## Calls placed
 

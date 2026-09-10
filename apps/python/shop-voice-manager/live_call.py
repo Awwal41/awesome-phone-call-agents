@@ -89,8 +89,16 @@ def provider_account_hash(api_key: str) -> str:
 # Request shaping
 # --------------------------------------------------------------------------
 
+# vendor_order and order_status key on the restock request/order they belong
+# to, not the calendar date — a shop can restock more than once a day, and
+# keying those two on the date would collide two unrelated orders together.
+# Matches client.py's REQUEST_KEYED_CALL_TYPES and safety.md's idempotency
+# table.
+REQUEST_KEYED_CALL_TYPES = {"vendor_order", "order_status"}
+
+
 def idempotency_key(shop_id: str, call_type: str, call_date: str,
-                    attempt: int = 1) -> str:
+                    attempt: int = 1, request_id: str | None = None) -> str:
     """One key per shop per call type per day, as specified in PROJECT_PLAN.md.
 
     The demo path emits `…-DEMO`. The live path must use the real date so a
@@ -103,8 +111,19 @@ def idempotency_key(shop_id: str, call_type: str, call_date: str,
     dial a second time, which is the exact thing the checkpoint prevents.
     Attempt 1 is byte-identical to the original key, so existing checkpoints
     and ledgers keep resolving.
+
+    `request_id` is required for `vendor_order` and `order_status` — see
+    REQUEST_KEYED_CALL_TYPES above — and ignored otherwise.
     """
-    base = f"shopvoice-{shop_id}-{call_type}-{call_date}"
+    if call_type in REQUEST_KEYED_CALL_TYPES:
+        if not request_id:
+            raise LiveCallError(
+                f"{call_type} calls key on the restock request, not the "
+                "date — pass request_id (the order_id)."
+            )
+        base = f"shopvoice-{shop_id}-{call_type}-{request_id}"
+    else:
+        base = f"shopvoice-{shop_id}-{call_type}-{call_date}"
     return base if attempt <= 1 else f"{base}-r{attempt}"
 
 
@@ -260,6 +279,19 @@ def to_ingest_shape(call: Any, request: dict, *, call_date: str, key: str) -> di
     if structured is not None and not isinstance(structured, dict):
         structured = _as_dict(structured)
 
+    metadata = {
+        "shop_id": request["shop_id"],
+        "call_type": request["call_type"],
+        "call_date": call_date,
+    }
+    # vendor_order and order_status ingest by metadata.order_id (see
+    # ingest.py) — the vendor has no reason to know our internal order id,
+    # and the owner callback schema requires the model to echo it back, which
+    # is not reliable enough to depend on alone. request_id carries the
+    # order_id for both, set by whoever built the request (see server.py).
+    if request["call_type"] in REQUEST_KEYED_CALL_TYPES and request.get("request_id"):
+        metadata["order_id"] = request["request_id"]
+
     shaped = {
         "call_id": call_id,
         "idempotency_key": key,
@@ -267,11 +299,7 @@ def to_ingest_shape(call: Any, request: dict, *, call_date: str, key: str) -> di
         "task_completed": bool(_field(call, "task_completed", False)),
         "completion_confidence": confidence,
         "structured_result": structured,
-        "metadata": {
-            "shop_id": request["shop_id"],
-            "call_type": request["call_type"],
-            "call_date": call_date,
-        },
+        "metadata": metadata,
     }
     recipients = raw.get("recipients")
     if recipients:
@@ -327,7 +355,7 @@ def _poll_until_terminal(client: Any, call_id: str, *, timeout_seconds: float,
 
 def execute_live(request: dict, client: Any, *, task: str, schema: dict,
                  provider_hash: str, call_date: str | None = None,
-                 attempt: int = 1,
+                 attempt: int = 1, request_id: str | None = None,
                  timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
                  sleep=time.sleep, monotonic=time.monotonic,
                  progress=None) -> dict:
@@ -335,6 +363,9 @@ def execute_live(request: dict, client: Any, *, task: str, schema: dict,
 
     Crash-safe: the checkpoint records the call id the moment CALL-E returns
     one, so a rerun polls the existing call instead of placing a second.
+
+    `request_id` (the order_id) is required for `vendor_order` and
+    `order_status` — see REQUEST_KEYED_CALL_TYPES.
     """
     if not request.get("recipient_consented"):
         raise LiveCallError(
@@ -343,7 +374,8 @@ def execute_live(request: dict, client: Any, *, task: str, schema: dict,
         )
 
     call_date = call_date or date.today().isoformat()
-    key = idempotency_key(request["shop_id"], request["call_type"], call_date, attempt)
+    key = idempotency_key(request["shop_id"], request["call_type"], call_date,
+                          attempt, request_id=request_id)
     checkpoint = checkpoint_path(provider_hash, key)
     state = read_checkpoint(checkpoint)
 

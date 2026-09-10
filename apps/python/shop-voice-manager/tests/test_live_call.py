@@ -159,6 +159,28 @@ def test_idempotency_key_matches_the_documented_format():
         "shopvoice-shop-a-inventory-2026-09-01"
 
 
+def test_request_keyed_call_types_key_on_the_order_not_the_date():
+    assert live_call.idempotency_key(
+        "shop-a", "vendor_order", "2026-09-01", request_id="order-restock-1-vendor-2",
+    ) == "shopvoice-shop-a-vendor_order-order-restock-1-vendor-2"
+
+
+def test_request_keyed_call_type_without_a_request_id_refuses():
+    """vendor_order/order_status must never fall back to a date-based key — a
+    shop can restock more than once a day, and a date key would silently
+    merge two unrelated orders into one checkpoint slot."""
+    with pytest.raises(live_call.LiveCallError, match="request_id"):
+        live_call.idempotency_key("shop-a", "vendor_order", "2026-09-01")
+
+
+def test_vendor_order_result_carries_order_id_in_metadata(tmp_path):
+    """ingest.py reads vendor_order's order_id from metadata only (the vendor
+    has no reason to know our internal id) — the live path must supply it."""
+    request = {**REQUEST, "call_type": "vendor_order", "request_id": "order-abc-vendor-1"}
+    result = run(StubClient(), request, request_id="order-abc-vendor-1")
+    assert result["metadata"]["order_id"] == "order-abc-vendor-1"
+
+
 def test_key_is_sent_to_calle():
     client = StubClient()
     run(client)

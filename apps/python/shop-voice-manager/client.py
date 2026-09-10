@@ -224,6 +224,7 @@ def run_live(args) -> int:
             schema=load_json(schema_path(request["call_type"])),
             provider_hash=live_call.provider_account_hash(api_key),
             call_date=call_date,
+            request_id=request.get("request_id") or request.get("order_id"),
             progress=live_call.stderr_progress,
         )
     except live_call.LiveCallError as exc:
