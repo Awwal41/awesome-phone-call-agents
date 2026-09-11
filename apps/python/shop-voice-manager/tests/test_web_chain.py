@@ -140,14 +140,36 @@ def test_reorder_offer_with_two_vendors_chains_to_both(conn):
 
 # --------------------------------------------------------------- vendor order
 
+def _seed_placed_order(conn) -> str:
+    """An order as it looks right after the vendor-call ingest updated it —
+    what _next_chain_requests actually reads from, not `structured` again."""
+    with conn:
+        store.upsert_vendor(conn, shop_id=SHOP["id"], display_name="Mama Sikiru",
+                            phone_e164="+2348111111111", now=NOW)
+        vendor = store.find_vendor_by_name(conn, shop_id=SHOP["id"], name="Mama Sikiru")
+        order_id = store.create_order(conn, request_id="restock-1", shop_id=SHOP["id"],
+                                      vendor_id=vendor["vendor_id"], now=NOW)
+        store.record_vendor_call(conn, order_id=order_id, vendor_call_id="call-vendor-1",
+                                 available=True, amount=45000, eta_text="around 4pm today")
+    return order_id
+
+
 def test_vendor_order_chains_to_the_owner_status_callback(conn):
+    order_id = _seed_placed_order(conn)
     request = {"call_type": "vendor_order", "shop_id": SHOP["id"]}
-    result = {"metadata": {"order_id": "order-restock-1-vendor-1"}, "structured_result": {}}
+    result = {"metadata": {"order_id": order_id}, "structured_result": {}}
     out = server._next_chain_requests(request, result, SHOP, conn)
     assert len(out) == 1
-    assert out[0]["call_type"] == "order_status"
-    assert out[0]["request_id"] == "order-restock-1-vendor-1"
-    assert out[0]["phone"] == SHOP["phone_e164"]
+    leg = out[0]
+    assert leg["call_type"] == "order_status"
+    assert leg["request_id"] == order_id
+    assert leg["phone"] == SHOP["phone_e164"]
+    # The owner callback must carry the real outcome — CALL-E rejects a task
+    # that asks it to invent one (this is exactly what broke live: the task
+    # said "state whether it was placed... if known" with no known value).
+    assert leg["order_status_known"] == "placed"
+    assert leg["order_amount"] == 45000
+    assert leg["order_eta_text"] == "around 4pm today"
 
 
 def test_vendor_order_without_an_order_id_does_not_chain(conn):
@@ -155,6 +177,14 @@ def test_vendor_order_without_an_order_id_does_not_chain(conn):
     the chain must stop rather than guess which order this was."""
     request = {"call_type": "vendor_order", "shop_id": SHOP["id"]}
     result = {"metadata": {}, "structured_result": {}}
+    assert server._next_chain_requests(request, result, SHOP, conn) == []
+
+
+def test_vendor_order_with_an_order_id_not_on_file_does_not_chain(conn):
+    """The order_id came back from CALL-E but doesn't match anything we
+    opened — report nothing rather than guess an outcome."""
+    request = {"call_type": "vendor_order", "shop_id": SHOP["id"]}
+    result = {"metadata": {"order_id": "order-does-not-exist"}, "structured_result": {}}
     assert server._next_chain_requests(request, result, SHOP, conn) == []
 
 
@@ -191,3 +221,47 @@ def test_launch_refuses_once_the_chain_cap_is_reached(monkeypatch):
     refused = server._launch(request, "2026-09-10", None, chain_id=root)
     assert refused is None
     assert server.CHAIN_COUNTS[root] == server.CHAIN_CAP
+
+
+# --------------------------------------------------------- shop phone safety
+
+def test_persisting_a_vendor_order_call_does_not_overwrite_the_shops_phone(
+    conn, tmp_path, monkeypatch
+):
+    """Regression for 2026-09-11: a vendor_order result's request["phone"] is
+    the vendor's number. _persist used to upsert_shop with it unconditionally,
+    which overwrote shops.phone_e164 — so every callback placed after a
+    vendor call dialed the vendor instead of the owner."""
+    db_path = tmp_path / "persist.db"
+    monkeypatch.setattr(server, "DB_PATH", db_path)
+    monkeypatch.setattr(server, "RESULTS_DIR", tmp_path / "call-results")
+    real_conn = store.connect(db_path)
+    store.initialize(real_conn)
+    with real_conn:
+        store.upsert_shop(real_conn, {
+            "shop_id": SHOP["id"], "display_name": "Ada Corner Shop",
+            "phone": SHOP["phone_e164"], "region": "NG", "locale": "en",
+            "currency": "NGN", "consent_timestamp": NOW,
+        })
+    real_conn.close()
+
+    request = {
+        "shop_id": SHOP["id"], "call_type": "vendor_order",
+        "phone": "+2348111111111",  # the vendor's number, not the shop's
+        "region": "NG", "locale": "en", "currency": "NGN",
+    }
+    result = {
+        "call_id": "call-vendor-1", "status": "completed", "task_completed": True,
+        "completion_confidence": {"score": 0.9},
+        "structured_result": {"vendor_order_completed": True, "available": True, "items": []},
+        "metadata": {"shop_id": SHOP["id"], "call_type": "vendor_order",
+                     "call_date": "2026-09-11", "order_id": "order-x"},
+    }
+    server._persist("unused-key", result, request)
+
+    check_conn = store.connect(db_path)
+    shop = check_conn.execute("SELECT phone_e164 FROM shops WHERE id = ?",
+                              (SHOP["id"],)).fetchone()
+    check_conn.close()
+    assert shop["phone_e164"] == SHOP["phone_e164"], (
+        "the shop's own phone was overwritten with the vendor's number")

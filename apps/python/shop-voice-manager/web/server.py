@@ -351,13 +351,27 @@ def attempts_for(shop_id: str) -> list[dict]:
         if not key.startswith(f"shopvoice-{shop_id}-"):
             continue
         rest = key[len(f"shopvoice-{shop_id}-"):]
-        parts = rest.split("-")
-        if len(parts) < 4:
+        call_type, _, remainder = rest.partition("-")
+        if not remainder:
             continue
+        # vendor_order/order_status key on an order_id (itself full of
+        # dashes), not a date — treating it as YYYY-MM-DD produced garbage
+        # ("undefined undefined NaN" in the console). Branch on which shape
+        # this call_type actually uses.
+        order_id = date = None
+        if call_type in client.REQUEST_KEYED_CALL_TYPES:
+            order_id = remainder
+        else:
+            parts = remainder.split("-")
+            if len(parts) < 3:
+                continue
+            date = "-".join(parts[:3])
         out.append({
             "call_id": cp.get("call_id"),
-            "call_type": parts[0],
-            "date": "-".join(parts[1:4]),
+            "call_type": call_type,
+            "shop_id": shop_id,
+            "order_id": order_id,
+            "date": date,
             "phase": cp.get("phase"),
             "status": cp.get("status"),
             "error": cp.get("error"),
@@ -588,13 +602,24 @@ def _next_chain_requests(request: dict, result: dict, shop: dict, conn) -> list[
             _log(f"{shop['id']}/vendor_order ({result.get('call_id')}): no order_id in "
                 f"metadata — cannot call the owner back about an order we can't identify")
             return []
-        _log(f"{shop['id']}/vendor_order: order {order_id} done -> calling {shop['id']} "
-            f"back with the status")
+        # The owner callback has to state a real outcome, not ask the model to
+        # invent one — pull it from the order row the vendor-call ingest just
+        # updated (store.record_vendor_call), not from `structured` again,
+        # since the row is the one place both legs agree on.
+        order = store.get_order(conn, order_id=order_id)
+        if order is None:
+            _log(f"{shop['id']}/vendor_order: order {order_id} not found — cannot report "
+                f"a status that isn't on file")
+            return []
+        _log(f"{shop['id']}/vendor_order: order {order_id} {order['status']} -> calling "
+            f"{shop['id']} back with the status")
         return [{
             "call_type": "order_status", "phone": shop["phone_e164"],
             "region": shop["region"], "locale": shop["locale"],
             "currency": shop["currency"], "shop_id": shop["id"],
             "recipient_consented": True, "request_id": order_id, "max_minutes": 2,
+            "order_status_known": order["status"],
+            "order_amount": order["amount"], "order_eta_text": order["eta_text"],
         }]
 
     return []  # order_status is terminal; onboarding/sales never chain
@@ -663,6 +688,53 @@ def start_checkin(body: dict) -> dict:
     return {"key": key, "demo": DEMO, "attempt": attempt, "chain_id": key}
 
 
+def retry_order_status(order_id: str) -> dict:
+    """Re-fire just the owner status callback for an order, without redialling
+    the vendor. Only makes sense when the vendor call already succeeded and
+    this leg alone failed (e.g. the task-creation rejection this fixes) —
+    the outcome it reports comes from the order row, not a fresh vendor call.
+    """
+    order_id = str(order_id or "").strip()
+    if not order_id:
+        raise ApiError(400, "order_id is required.")
+
+    conn = _conn()
+    try:
+        order = store.get_order(conn, order_id=order_id)
+    finally:
+        conn.close()
+    if order is None:
+        raise ApiError(404, f"No order with id {order_id!r}.")
+
+    shop = customer(order["shop_id"])
+    if shop["region"].upper() in BLOCKED:
+        raise ApiError(400,
+            f"{shop['region'].upper()} is not enabled on this account.")
+
+    api_key = os.environ.get("CALLE_API_KEY")
+    if not api_key and not DEMO:
+        raise ApiError(400,
+            "CALLE_API_KEY is not set on the server. Export it and restart, "
+            "or set SHOPVOICE_DEMO=1 to replay a stored call.")
+
+    request = {
+        "call_type": "order_status", "phone": shop["phone_e164"],
+        "region": shop["region"], "locale": shop["locale"],
+        "currency": shop["currency"], "shop_id": shop["id"],
+        "recipient_consented": True, "request_id": order_id, "max_minutes": 2,
+        "order_status_known": order["status"],
+        "order_amount": order["amount"], "order_eta_text": order["eta_text"],
+    }
+    call_date = date.today().isoformat()
+    # A retry is its own chain, not a continuation of the one that failed —
+    # order_status is terminal, so nothing auto-fires after it either way.
+    key = _launch(request, call_date, api_key)
+    if key is None:
+        raise ApiError(500, "Could not start the retry.")
+    _log(f"{shop['id']}/order_status: retrying order {order_id} (status={order['status']})")
+    return {"key": key, "demo": DEMO}
+
+
 def _set(key: str, **fields):
     with RUNS_LOCK:
         if key in RUNS:
@@ -677,8 +749,12 @@ def _persist(key: str, result: dict, request: dict) -> "ingest.IngestResult":
             json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     conn = _conn()
     try:
-        with conn:
-            store.upsert_shop(conn, {**request, "display_name": request.get("shop_id")})
+        # request["phone"] is the vendor's number for vendor_order, not the
+        # shop's — upsert_shop would overwrite shops.phone_e164 with it. See
+        # THIRD_PARTY_RECIPIENT_CALL_TYPES.
+        if request["call_type"] not in client.THIRD_PARTY_RECIPIENT_CALL_TYPES:
+            with conn:
+                store.upsert_shop(conn, {**request, "display_name": request.get("shop_id")})
         verdict = ingest.ingest_call(conn, result)
     finally:
         conn.close()
@@ -821,7 +897,16 @@ def run_status(key: str) -> dict:
         run = RUNS.get(key)
         if not run:
             raise ApiError(404, "Unknown run.")
-        return dict(run)
+        run = dict(run)
+    # `elapsed` in RUNS is a snapshot from live_call's own progress callback,
+    # which only fires on a status change or its 30s heartbeat — reporting it
+    # as-is makes the modal's clock visibly stall between those, then jump.
+    # Recompute it from `started` on every read instead, so it ticks with
+    # however often the browser actually polls, independent of CALL-E's
+    # internal cadence. A finished run keeps its last recorded value.
+    if not run.get("done") and run.get("started"):
+        run["elapsed"] = round(time.time() - run["started"], 1)
+    return run
 
 
 # --------------------------------------------------------------------------
@@ -895,7 +980,9 @@ class Handler(BaseHTTPRequestHandler):
                     "date": date.today().isoformat(),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "outcome": "running", "phase": r.get("phase"),
-                    "elapsed": r.get("elapsed", 0),
+                    # Same fix as run_status(): don't show the stale
+                    # progress-callback snapshot, compute it live.
+                    "elapsed": round(time.time() - r["started"], 1) if r.get("started") else 0,
                     "accepted": 0, "confidence": None, "products": [], "low": 0,
                     "chain_id": r.get("chain_id"), "chain_position": r.get("chain_position"),
                     "parent_key": r.get("parent_key"), "next_keys": r.get("next_keys", []),
@@ -935,6 +1022,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, save_customer(body))
             if parts == ["checkins"]:
                 return self._json(202, start_checkin(body))
+            if len(parts) == 3 and parts[0] == "orders" and parts[2] == "retry-status":
+                return self._json(202, retry_order_status(parts[1]))
             self._json(404, {"error": "Unknown endpoint."})
         except ApiError as exc:
             self._json(exc.status, {"error": exc.message})

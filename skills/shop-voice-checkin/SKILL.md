@@ -96,12 +96,15 @@ under {{max_minutes}} minutes. Do not give financial advice.
 
 ```text
 Call the consenting shop owner. Tell them the following is running low:
-{{low_stock_items}}. Ask if they want to place a restock order. If yes, ask quantity needed per
-item and which vendor to use — name, what the vendor sells, and phone number
-if known (reuse a saved vendor if they name one already on file). If no, end
-politely; do not place any vendor call. Never invent a vendor phone number.
-Disclose you are an AI assistant. Keep the call under {{max_minutes}} minutes.
-Do not give financial advice or discuss loans.
+{{low_stock_items}}. Ask if they want to place a restock order. If yes, ask quantity
+needed per item, then ask which vendor to use. If it is a vendor already on file, do
+not ask what they sell or their phone number again. If it is a new vendor, explicitly
+ask two more questions before ending the call: what the vendor sells, and the
+vendor's phone number — do not skip the phone number just because the owner did not
+offer it; ask for it directly. If the owner truly does not have it, say the vendor
+cannot be called yet without it. Never invent a vendor phone number. If no, end
+politely; do not place any vendor call. Disclose you are an AI assistant. Keep the
+call under {{max_minutes}} minutes. Do not give financial advice or discuss loans.
 ```
 
 ## Call task template (vendor order)
@@ -118,8 +121,10 @@ loans.
 
 ```text
 Call the consenting shop owner with a short update on their restock order.
-Disclose you are an AI assistant. State whether the order was placed, with the
-vendor's quoted ETA and amount if known. Keep under 2 minutes. Do not give
+Disclose you are an AI assistant. Tell them exactly the known outcome from the
+vendor call — placed, unavailable, or delayed — plus the ETA and amount if
+known. Do not leave the outcome for the model to guess; a task with no known
+outcome to report should not be created. Keep under 2 minutes. Do not give
 financial advice.
 ```
 

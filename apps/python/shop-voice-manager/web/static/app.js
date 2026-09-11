@@ -381,13 +381,13 @@ async function pageCustomer(id){
     if(c.outcome === "failed"){
       FAILURES[c.call_id] = c;
       return '<div class="row" data-fail="' + esc(c.call_id) + '">'
-        + '<div class="row-main"><span class="row-title">' + niceDate(c.date) + "</span>"
+        + '<div class="row-main"><span class="row-title">' + niceDate(c.date || c.created_at) + "</span>"
         + '<span class="row-sub" style="color:var(--attn)">'
         + esc(c.error || "Abandoned before CALL-E was asked to create the call.")
         + "</span></div>"
         + '<div class="row-end">'
         + '<span class="chip ' + (c.call_type === "sales" ? "sal" : "inv") + '">'
-        + esc(c.call_type) + "</span>"
+        + esc(Chain.chainLabel(c.call_type)) + "</span>"
         + '<span class="chip low">Not placed</span>' + CHEV + "</div></div>";
     }
     const right = c.revenue != null
@@ -526,7 +526,7 @@ function openFailure(id){
   if(!c) return;
   const d = $("callModal");
   $("mTitle").textContent = "Call not placed";
-  $("mSub").textContent = niceDate(c.date) + "  ·  " + (c.call_type || "");
+  $("mSub").textContent = niceDate(c.date || c.created_at) + "  ·  " + (Chain.chainLabel(c.call_type) || "");
   $("mBody").innerHTML =
       '<div class="warnline" style="display:block">'
       + esc(c.error || "Abandoned before CALL-E was asked to create the call.")
@@ -537,10 +537,35 @@ function openFailure(id){
              create_failed:"CALL-E returned no call id"}[c.phase] || c.phase || "unknown")
       + "</dd></dl>"
     + '<dl class="callrow"><dt>Cost</dt><dd>Nothing. No call was placed.</dd></dl>';
-  $("mFoot").innerHTML = '<span class="spacer"></span>'
+  const canRetry = c.call_type === "order_status" && c.order_id && c.shop_id;
+  $("mFoot").innerHTML = (canRetry
+      ? '<button class="btn ghost" id="mRetry" type="button">Retry this call</button>' : "")
+    + '<span class="spacer"></span>'
     + '<button class="btn" id="mClose" type="button">Close</button>';
   $("mClose").addEventListener("click", closeCall);
+  if(canRetry) $("mRetry").addEventListener("click", () => retryOrderStatus(c));
   if(!d.open) d.showModal();
+}
+
+/* The vendor call already succeeded — this only re-fires the owner callback,
+   reusing the outcome already on file, never redialling the vendor. */
+async function retryOrderStatus(c){
+  let shop;
+  try{ shop = await api("/customers/" + encodeURIComponent(c.shop_id)); }
+  catch(e){ return; }
+  renderCallLive();
+  followInBackground();
+  try{
+    const {key} = await api("/orders/" + encodeURIComponent(c.order_id) + "/retry-status",
+      {method: "POST"});
+    watch(key, shop);
+  }catch(e){
+    $("beacon").className = "beacon failed";
+    renderPhases("failed");
+    $("statusNow").textContent = "Not placed";
+    $("statusSub").textContent = "";
+    $("resultBody").innerHTML = errorCallout(e.message);
+  }
 }
 
 /* A finished call opens in the dialog too. Navigating to a page lost the

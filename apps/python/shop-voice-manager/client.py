@@ -37,6 +37,14 @@ SCHEMA_FILES = {
 # key on request_id/order_id rather than the calendar date, per safety.md.
 REQUEST_KEYED_CALL_TYPES = {"vendor_order", "order_status"}
 
+# request["phone"] is a third party's number for these, not the shop's own —
+# a caller must never pass one of these requests to store.upsert_shop, which
+# unconditionally overwrites shops.phone_e164 with whatever "phone" it is
+# given. Confused live vendor calls with the owner's callback this way once
+# already (2026-09-11): the vendor call clobbered the shop's own number, and
+# every callback after it dialed the vendor instead of the owner.
+THIRD_PARTY_RECIPIENT_CALL_TYPES = {"vendor_order"}
+
 
 def schema_path(call_type: str) -> Path:
     name = SCHEMA_FILES.get(call_type)
@@ -80,9 +88,13 @@ def build_task(request: dict) -> str:
         return (
             f"Call the consenting shop owner at {shop}. Use {tone}. Tell them {items} {verb} "
             f"running low and ask if they want to place a restock order. If yes, ask quantity "
-            f"needed per item and which vendor to use — name, what the vendor sells, and phone "
-            f"number if known (reuse a saved vendor if they name one already on file). If no, "
-            f"end politely; do not place any vendor call. Never invent a vendor phone number. "
+            f"needed per item, then ask which vendor to use. If it is a vendor already on file, "
+            f"you do not need to ask what they sell or their phone number again. If it is a new "
+            f"vendor, you must explicitly ask two more questions before ending the call: what "
+            f"the vendor sells, and the vendor's phone number — do not skip the phone number "
+            f"just because the owner did not offer it; ask for it directly. If the owner truly "
+            f"does not have it, say the vendor cannot be called yet without it. Never invent a "
+            f"vendor phone number. If no, end politely; do not place any vendor call. "
             f"{disclose} Keep under {minutes} minutes. Do not give financial advice or discuss loans."
         )
     if call_type == "vendor_order":
@@ -94,10 +106,23 @@ def build_task(request: dict) -> str:
             f"it, and an estimated delivery time. Do not discuss payment, bank details, or loans."
         )
     if call_type == "order_status":
+        status = request.get("order_status_known")
+        outcome = {
+            "placed": "The order was placed with the vendor.",
+            "unavailable": "The vendor could not fulfill the order.",
+            "delayed": "The order is placed but delayed.",
+        }.get(status, "The order status is unknown — say the office will follow up.")
+        eta = request.get("order_eta_text")
+        amount = request.get("order_amount")
+        extra = " ".join(filter(None, [
+            f"Delivery is expected {eta}." if eta else "",
+            f"The quoted amount is {amount}." if amount else "",
+        ]))
+        message = " ".join(filter(None, [outcome, extra]))
         return (
             f"Call the consenting shop owner at {shop} with a short update on their restock "
-            f"order. {disclose} State whether the order was placed, with the vendor's quoted "
-            f"ETA and amount if known. Keep under 2 minutes. Do not give financial advice."
+            f"order. {disclose} Tell them exactly this: {message} "
+            f"Keep under 2 minutes. Do not give financial advice."
         )
     if call_type == "onboarding":
         return (
@@ -243,9 +268,12 @@ def run_live(args) -> int:
         store.initialize(conn)
         try:
             # Without this the readings land but `shops` stays empty, and
-            # summarize.py reports the shop is not in the ledger.
-            with conn:
-                store.upsert_shop(conn, request)
+            # summarize.py reports the shop is not in the ledger. Skipped for
+            # vendor_order: request["phone"] is the vendor's number there,
+            # and upsert_shop would overwrite shops.phone_e164 with it.
+            if request["call_type"] not in THIRD_PARTY_RECIPIENT_CALL_TYPES:
+                with conn:
+                    store.upsert_shop(conn, request)
             verdict = ingest.ingest_call(conn, result)
         finally:
             conn.close()
