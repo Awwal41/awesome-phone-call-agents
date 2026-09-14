@@ -58,7 +58,7 @@ def test_low_stock_inventory_chains_to_a_reorder_offer(conn):
     assert out[0]["call_type"] == "reorder_offer"
     assert out[0]["low_stock_items"] == ["Fish"]
     assert out[0]["phone"] == SHOP["phone_e164"]
-    assert out[0]["recipient_consented"] is True
+    assert "recipient_consented" not in out[0]
 
 
 def test_inventory_with_nothing_low_does_not_chain(conn):
@@ -93,6 +93,8 @@ def test_reorder_offer_yes_chains_to_the_named_vendor(conn):
     assert leg["phone"] == "+2348111111111"
     assert leg["vendor_display_name"] == "Mama Sikiru"
     assert leg["order_items"] == ["2 cooler boxes Fish"]
+    assert "recipient_consented" not in leg
+    assert "vendor_contact_authorized" not in leg
 
     order = store.get_order(conn, order_id=leg["request_id"])
     assert order is not None
@@ -265,3 +267,85 @@ def test_persisting_a_vendor_order_call_does_not_overwrite_the_shops_phone(
     check_conn.close()
     assert shop["phone_e164"] == SHOP["phone_e164"], (
         "the shop's own phone was overwritten with the vendor's number")
+
+
+def test_live_chain_is_advisory_only(monkeypatch, tmp_path):
+    """Live mode must not auto-dial vendor/callback legs without approval."""
+    monkeypatch.setattr(server, "DEMO", False)
+    db_path = tmp_path / "advisory.db"
+    monkeypatch.setattr(server, "DB_PATH", db_path)
+    real = store.connect(db_path)
+    store.initialize(real)
+    with real:
+        store.upsert_shop(real, {
+            "shop_id": SHOP["id"], "display_name": "Ada",
+            "phone": SHOP["phone_e164"], "region": "NG", "locale": "en",
+            "currency": "NGN", "consent_timestamp": NOW,
+        })
+    real.close()
+
+    launched = []
+    monkeypatch.setattr(
+        server, "_launch",
+        lambda *a, **k: launched.append(a) or "launched")
+
+    request = {"call_type": "inventory", "shop_id": SHOP["id"]}
+    result = {
+        "call_id": "call-inv-1",
+        "structured_result": {"products": [{"name": "Fish", "running_low": True}]},
+    }
+    with server.RUNS_LOCK:
+        server.RUNS["parent"] = {"key": "parent", "chain_id": "parent"}
+
+    server._maybe_continue_chain(
+        "parent", request, result, "2026-09-10", "key", accepted=True)
+
+    assert launched == []
+    with server.RUNS_LOCK:
+        pending = server.RUNS["parent"].get("pending_next") or []
+        assert len(pending) == 1
+        assert pending[0]["call_type"] == "reorder_offer"
+        assert pending[0]["requires_authorization"] is True
+        assert "phone" not in pending[0]
+        assert pending[0]["phone_masked"]
+
+
+def test_approve_next_requires_vendor_authorization(monkeypatch):
+    monkeypatch.setattr(server, "DEMO", False)
+    monkeypatch.setenv("CALLE_API_KEY", "test-key")
+    launched = []
+    monkeypatch.setattr(
+        server, "_launch",
+        lambda req, *a, **k: launched.append(req) or "new-key")
+
+    leg = {
+        "call_type": "vendor_order", "phone": "+2348111111111",
+        "shop_id": SHOP["id"], "region": "NG", "locale": "en",
+        "currency": "NGN", "request_id": "order-1",
+    }
+    with server.RUNS_LOCK:
+        server.RUNS["parent"] = {
+            "key": "parent", "chain_id": "parent",
+            "pending_requests": [leg],
+            "pending_next": [server._pending_leg_public(leg)],
+        }
+
+    with pytest.raises(server.ApiError, match="vendor_contact_authorized"):
+        server.approve_next({"parent_key": "parent", "leg_index": 0, "consent": True})
+
+    out = server.approve_next({
+        "parent_key": "parent", "leg_index": 0,
+        "consent": True, "vendor_contact_authorized": True,
+    })
+    assert out["key"] == "new-key"
+    assert launched[0]["recipient_consented"] is True
+    assert launched[0]["vendor_contact_authorized"] is True
+
+
+def test_public_shop_masks_phone():
+    shop = {**SHOP, "display_name": "Ada"}
+    public = server._public_shop(shop)
+    assert "phone_e164" not in public
+    assert public["phone_masked"].startswith("+")
+    assert "*" in public["phone_masked"]
+    assert "0000" in public["phone_masked"] or public["phone_masked"].endswith("0000")

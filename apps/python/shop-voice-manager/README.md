@@ -137,8 +137,16 @@ Pressing **Place check-in call** with a key set places a real call and spends a
 credit, exactly like `--execute`. The consent record and the product list both
 have to be in place first.
 
-`http.server` is right for one operator on localhost. It is not hardened for
-the public internet, so do not bind it to `0.0.0.0` on a shared network.
+`http.server` is right for one operator on localhost. Non-loopback binds are
+refused unless `SHOPVOICE_ALLOW_REMOTE=1` and `SHOPVOICE_REMOTE_TOKEN` are set;
+mutating API routes also reject cross-origin controls. Do not bind `0.0.0.0`
+on a shared network without that token.
+
+Live procurement after the first check-in is **advisory**: the console plans
+reorder / vendor / status legs but does not dial them until
+`POST /api/checkins/approve` with explicit `consent` (and
+`vendor_contact_authorized` for vendor legs). `SHOPVOICE_DEMO=1` may
+auto-rehearse the chain with fixtures.
 
 ## Calls placed
 

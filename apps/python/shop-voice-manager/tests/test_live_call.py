@@ -234,7 +234,9 @@ def test_an_interrupted_attempt_reuses_its_key_so_calle_can_dedupe(tmp_path):
 def test_a_refused_create_is_recorded_so_a_retry_can_use_a_new_key(tmp_path):
     class Refusing(StubCalls):
         def create(self, **kwargs):
-            raise RuntimeError("Call task creation was rejected")
+            err = RuntimeError("Call task creation was rejected")
+            err.status_code = 400
+            raise err
 
     client = StubClient()
     client.calls = Refusing()
@@ -244,6 +246,81 @@ def test_a_refused_create_is_recorded_so_a_retry_can_use_a_new_key(tmp_path):
     written = [json.loads(f.read_text(encoding="utf-8"))
                for f in (tmp_path / ".call-state").rglob("*.json")]
     assert any(w.get("phase") == "create_rejected" for w in written)
+
+
+def test_timeout_or_5xx_keeps_reserved_key_for_rerun(tmp_path):
+    """Ambiguous create failures must not be relabeled rejected."""
+    class Flaky(StubCalls):
+        def __init__(self):
+            super().__init__()
+            self.boom = True
+
+        def create(self, **kwargs):
+            self.create_calls.append(kwargs)
+            if self.boom:
+                self.boom = False
+                err = RuntimeError("upstream 503 temporarily unavailable")
+                err.status_code = 503
+                raise err
+            return StubCall()
+
+    client = StubClient()
+    client.calls = Flaky()
+    with pytest.raises(RuntimeError, match="503"):
+        run(client)
+
+    checkpoint = next((tmp_path / ".call-state").rglob("*.json"))
+    state = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert state["phase"] == "reserved"
+    reserved_key = state["request_idempotency_key"]
+
+    result = run(client)
+    assert client.calls.create_calls[-1]["idempotency_key"] == reserved_key
+    assert result["call_id"] == "call_test_1"
+
+
+def test_missing_call_id_preserves_reserved_key(tmp_path):
+    client = StubClient(created=StubCall(call_id=""))
+    with pytest.raises(live_call.LiveCallError, match="call id"):
+        run(client)
+
+    checkpoint = next((tmp_path / ".call-state").rglob("*.json"))
+    state = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert state["phase"] == "create_unknown"
+    reserved_key = state["request_idempotency_key"]
+
+    client2 = StubClient()
+    # Same shop/type/date slot → same checkpoint → must reuse the key.
+    result = run(client2)
+    assert client2.calls.create_calls[0]["idempotency_key"] == reserved_key
+    assert result["call_id"] == "call_test_1"
+
+
+def test_validate_e164_rejects_local_numbers():
+    with pytest.raises(live_call.LiveCallError, match="E.164"):
+        live_call.validate_e164("08012345678")
+    assert live_call.validate_e164("+2348000000000") == "+2348000000000"
+
+
+def test_public_result_masks_recipient_phones():
+    shaped = live_call.public_result({
+        "call_id": "c1",
+        "recipients": [{"phones": ["+2348000000000"], "region": "NG"}],
+    })
+    assert shaped["recipients"][0]["phones"][0] != "+2348000000000"
+    assert "*" in shaped["recipients"][0]["phones"][0]
+
+
+def test_redact_phones_in_errors():
+    text = live_call.redact_phones("failed for +2348000000000 please retry")
+    assert "+2348000000000" not in text
+    assert "[phone]" in text
+
+
+def test_a_response_without_a_call_id_is_an_error_not_a_silent_pass():
+    client = StubClient(created=StubCall(call_id=""))
+    with pytest.raises(live_call.LiveCallError, match="call id"):
+        run(client)
 
 
 def test_an_edited_request_still_polls_instead_of_calling_again():
@@ -270,12 +347,6 @@ def test_rerun_after_a_crash_polls_instead_of_calling_again():
     assert second.calls.create_calls == [], "a second call was placed"
     assert second.calls.get_calls == ["call_test_1"]
     assert result["call_id"] == "call_test_1"
-
-
-def test_a_response_without_a_call_id_is_an_error_not_a_silent_pass():
-    client = StubClient(created=StubCall(call_id=""))
-    with pytest.raises(live_call.LiveCallError, match="call id"):
-        run(client)
 
 
 def test_a_corrupt_checkpoint_refuses_rather_than_risking_a_duplicate(tmp_path):

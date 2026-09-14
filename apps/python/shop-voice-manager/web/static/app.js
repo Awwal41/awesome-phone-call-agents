@@ -7,7 +7,14 @@ const $ = id => document.getElementById(id);
 const view = () => $("view");
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const digits = s => String(s).replace(/[^\d]/g, "");
-const mask = v => { const d = digits(v); return d.length < 7 ? String(v) : "+" + d.slice(0,5) + "****" + d.slice(-2); };
+const mask = v => {
+  if (v == null || v === "") return "";
+  const s = String(v);
+  if (s.includes("*")) return s;  // already masked by the API
+  const d = digits(s);
+  return d.length < 7 ? s : "+" + "*".repeat(Math.max(0, d.length - 4)) + d.slice(-4);
+};
+const phoneOf = obj => obj.phone_masked || mask(obj.phone_e164 || obj.phone);
 const mmss = s => Math.floor(s/60) + ":" + String(Math.floor(s%60)).padStart(2,"0");
 /* The styled error box used wherever a call could not be placed — CALL-E's
    own rejection text (e.g. an unsupported region/language pair) can run to
@@ -113,7 +120,7 @@ async function pageCustomers(){
   const rows = customers.map(c =>
     '<div class="row" data-go="#/customer/' + encodeURIComponent(c.id) + '">'
     + '<div class="row-main"><span class="row-title">' + esc(c.display_name || c.id) + "</span>"
-    + '<span class="row-sub">' + mask(c.phone_e164) + " &middot; " + esc(c.region)
+    + '<span class="row-sub">' + phoneOf(c) + " &middot; " + esc(c.region)
     + " &middot; " + esc(c.currency) + "</span></div>"
     + '<div class="row-end">'
     + '<span class="chip ' + (c.calls ? "ok" : c.failed ? "low" : "idle") + '">'
@@ -410,12 +417,12 @@ async function pageCustomer(id){
   return '<div class="crumb"><a href="#/customers">Customers</a><span class="sep">/</span><span>'
     + esc(shop.display_name || shop.id) + "</span></div>"
     + '<div class="page-head"><div><h1>' + esc(shop.display_name || shop.id) + "</h1>"
-    + "<p>" + mask(shop.phone_e164) + " &middot; " + esc(shop.region) + "</p></div>"
+    + "<p>" + phoneOf(shop) + " &middot; " + esc(shop.region) + "</p></div>"
     + '<button class="btn" data-call="' + esc(id) + '">Place check-in call</button></div>'
     + '<div class="grid2"><div class="stack">'
       + '<section class="panel"><div class="panel-head"><h2>Details</h2></div><div class="panel-body">'
       + '<dl class="kv"><dt>Shop ID</dt><dd class="num">' + esc(shop.id) + "</dd>"
-      + "<dt>Phone</dt><dd class=\"num\">" + mask(shop.phone_e164) + "</dd>"
+      + "<dt>Phone</dt><dd class=\"num\">" + phoneOf(shop) + "</dd>"
       + "<dt>Country</dt><dd>" + esc(countryOf(shop.region).name) + "</dd>"
       + "<dt>Owner hears</dt><dd>" + esc(voiceName(shop.locale, shop.language_style)) + "</dd>"
       + "<dt>Currency</dt><dd>" + esc(shop.currency) + "</dd>"
@@ -664,7 +671,7 @@ function renderCallForm(){
   $("mSub").textContent = s.display_name || s.id;
 
   $("mBody").innerHTML =
-      '<dl class="callrow"><dt>Number</dt><dd class="num">' + mask(s.phone_e164) + "</dd></dl>"
+      '<dl class="callrow"><dt>Number</dt><dd class="num">' + phoneOf(s) + "</dd></dl>"
     + '<dl class="callrow"><dt>Country</dt><dd>' + esc(s.region) + "</dd></dl>"
     + '<dl class="callrow"><dt>Owner hears</dt><dd>'
       + esc(voiceName(s.locale, s.language_style)) + "</dd></dl>"
@@ -870,7 +877,7 @@ async function pageSchedule(){
   const rows = customers.length ? customers.map(c =>
     '<div class="row" style="cursor:default"><div class="row-main">'
     + '<span class="row-title">' + esc(c.display_name || c.id) + "</span>"
-    + '<span class="row-sub">' + mask(c.phone_e164) + "</span></div>"
+    + '<span class="row-sub">' + phoneOf(c) + "</span></div>"
     + '<div class="row-end"><span class="chip idle">Not scheduled</span>'
     + '<button class="btn ghost" disabled>Create</button></div></div>').join("")
     : '<div class="empty"><p>No shops yet</p><span>Add a shop to schedule it.</span></div>';

@@ -145,10 +145,12 @@ def _idempotency_key(request: dict) -> str:
 
 
 def preview(request: dict) -> dict:
+    import live_call
+
     return {
         "mode": "demo",
         "side_effects": "none — no CALL-E network call",
-        "phone_masked": request["phone"][:6] + "****" + request["phone"][-2:],
+        "phone_masked": live_call.mask_phone(request.get("phone")),
         "region": request["region"],
         "locale": request["locale"],
         "call_type": request["call_type"],
@@ -234,6 +236,28 @@ def run_live(args) -> int:
         )
         return 2
 
+    if request.get("call_type") in THIRD_PARTY_RECIPIENT_CALL_TYPES:
+        if not args.confirm_vendor_order:
+            print(
+                "vendor_order requires --confirm-vendor-order in addition to "
+                "recipient opt-in. Do not dial a vendor without explicit authorization.",
+                file=sys.stderr,
+            )
+            return 2
+        if not request.get("vendor_contact_authorized"):
+            print(
+                f"{args.request}: vendor_contact_authorized is not true. "
+                "Do not synthesize vendor consent from the shop owner's opt-in.",
+                file=sys.stderr,
+            )
+            return 2
+
+    try:
+        live_call.validate_e164(request.get("phone"))
+    except live_call.LiveCallError as exc:
+        print(f"Live call failed: {exc}", file=sys.stderr)
+        return 1
+
     api_key = os.environ.get("CALLE_API_KEY")
     if not api_key:
         print("CALLE_API_KEY is not set. Export it, then re-run.", file=sys.stderr)
@@ -255,10 +279,10 @@ def run_live(args) -> int:
             progress=live_call.stderr_progress,
         )
     except live_call.LiveCallError as exc:
-        print(f"Live call failed: {exc}", file=sys.stderr)
+        print(f"Live call failed: {live_call.redact_phones(str(exc))}", file=sys.stderr)
         return 1
 
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(live_call.public_result(result), ensure_ascii=False, indent=2))
 
     if args.db:
         import ingest
@@ -318,6 +342,11 @@ def main() -> int:
         "--confirm-recipient-opt-in",
         action="store_true",
         help="Required with --execute: the recipient has consented to be called.",
+    )
+    parser.add_argument(
+        "--confirm-vendor-order",
+        action="store_true",
+        help="Required with vendor_order: explicit authorization to dial the vendor.",
     )
     parser.add_argument(
         "--call-date",

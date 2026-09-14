@@ -3,20 +3,23 @@
 
 Standard library only, because the app declares `dependencies = []` and a test
 asserts it stays that way. `http.server` is enough for a single-operator
-console; it is not a public web server and should not be exposed to the
-internet.
+console on loopback; it is not a public web server.
 
 Additive by construction: this package imports the existing modules and does
 not modify them. Deleting `web/` leaves the CLI and the ledger untouched.
 
 Everything is configuration, not code:
 
-    CALLE_API_KEY     required to place a real call. Never read by the browser.
-    SHOPVOICE_DB      ledger path            (default: ./shop.db)
-    SHOPVOICE_HOST    bind address           (default: 127.0.0.1)
-    SHOPVOICE_PORT    port                   (default: 8765)
-    SHOPVOICE_DEMO    "1" replays a stored call instead of dialling
-    CALLE_BASE_URL    honoured by live_call, allowlisted there
+    CALLE_API_KEY           required to place a real call. Never read by the browser.
+    SHOPVOICE_DB            ledger path            (default: ./shop.db)
+    SHOPVOICE_HOST          bind address           (default: 127.0.0.1; loopback only
+                                                   unless SHOPVOICE_ALLOW_REMOTE=1)
+    SHOPVOICE_PORT          port                   (default: 8765)
+    SHOPVOICE_DEMO          "1" replays a stored call instead of dialling
+    SHOPVOICE_ALLOW_REMOTE  "1" permits non-loopback bind (still needs a token)
+    SHOPVOICE_REMOTE_TOKEN  required when remote bind is enabled; sent as
+                            X-ShopVoice-Token on mutating requests
+    CALLE_BASE_URL          honoured by live_call, allowlisted there
 
 Run:  python3 web/server.py
 """
@@ -136,24 +139,24 @@ RUNS: dict[str, dict] = {}
 RUNS_LOCK = threading.Lock()
 
 # --------------------------------------------------------------------------
-# Phase 2 — procurement auto-chain
+# Phase 2 — procurement chain
 #
-# Overrides the terminal-only rule in CLAUDE.md and the one-shot-per-call
-# design in docs/projects/voice-shop-manager/NEXT_STEPS.md: starting the
-# inventory check-in from this console is the *only* human action. If it
-# flags low stock, this fires the reorder-offer call itself; if the owner
-# says yes, it dials the named vendor itself; once the vendor answers, it
-# calls the owner back itself. Nobody reviews a plan or clicks between
-# those steps — see the decision recorded 2026-09-10.
+# Demo (`SHOPVOICE_DEMO=1`): the inventory trigger may auto-rehearse
+# reorder → vendor → owner-status using fixtures (sandbox / advisory).
 #
-# CHAIN_CAP exists because that override removes the human who would
-# otherwise notice a chain running away (e.g. a reorder call naming several
-# vendors, each opening its own vendor + callback pair). It is the only
-# remaining brake on the 20-call demo budget for an auto-fired chain.
+# Live: the same plan is computed, but vendor ordering and follow-up legs are
+# advisory-only until an operator POSTs /api/checkins/approve with explicit
+# per-recipient authorization. Consent is never synthesized from the shop
+# owner's check-in opt-in.
+#
+# CHAIN_CAP caps total calls per chain (demo auto-fire or live approvals).
 # --------------------------------------------------------------------------
 
-CHAIN_CAP = 10  # 1 trigger + at most 9 auto-fired calls, per chain
+CHAIN_CAP = 10  # 1 trigger + at most 9 follow-up calls, per chain
 CHAIN_COUNTS: dict[str, int] = {}
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+SERVER_HOST = os.environ.get("SHOPVOICE_HOST", "127.0.0.1")
+SERVER_PORT = int(os.environ.get("SHOPVOICE_PORT", "8765"))
 
 
 class ApiError(Exception):
@@ -374,7 +377,7 @@ def attempts_for(shop_id: str) -> list[dict]:
             "date": date,
             "phase": cp.get("phase"),
             "status": cp.get("status"),
-            "error": cp.get("error"),
+            "error": live_call.redact_phones(cp.get("error")),
             "created_at": cp.get("updated_at") or "",
         })
     return out
@@ -422,7 +425,7 @@ def call_detail(call_id: str) -> dict:
             detail = shop_calls[0]
     if payload:
         structured = payload.get("structured_result") or {}
-        detail["transcript"] = transcript_of(payload)
+        detail["transcript"] = _redact_transcript(transcript_of(payload))
         detail["duration"] = duration_of(payload)
         detail["evidence"] = payload.get("evidence") or []
         detail["notes"] = structured.get("owner_notes") or ""
@@ -453,10 +456,14 @@ def save_customer(body: dict) -> dict:
     for field in ("shop_id", "phone", "region", "locale"):
         if not str(body.get(field) or "").strip():
             raise ApiError(400, f"{field} is required.")
+    try:
+        phone = live_call.validate_e164(body["phone"])
+    except live_call.LiveCallError as exc:
+        raise ApiError(400, str(exc)) from exc
     profile = {
         "shop_id": body["shop_id"].strip(),
         "display_name": (body.get("display_name") or "").strip() or body["shop_id"].strip(),
-        "phone": body["phone"].strip(),
+        "phone": phone,
         "region": body["region"].strip().upper(),
         "locale": body["locale"].strip(),
         "currency": (body.get("currency") or CURRENCIES[0]).strip().upper(),
@@ -486,7 +493,7 @@ def save_customer(body: dict) -> dict:
             store.seed_products(conn, profile)
     finally:
         conn.close()
-    return customer(profile["shop_id"])
+    return _public_shop(customer(profile["shop_id"]))
 
 
 def _now() -> str:
@@ -498,7 +505,53 @@ def _log(msg: str) -> None:
     built on it — where an operator watching the process, not the browser,
     can see why a leg was or wasn't trusted, and why the next call did or
     didn't fire. stderr, same as the request log below, never stdout."""
-    print(f"  [chain] {msg}", file=sys.stderr, flush=True)
+    print(f"  [chain] {live_call.redact_phones(msg)}", file=sys.stderr, flush=True)
+
+
+def _public_shop(shop: dict) -> dict:
+    """API copy of a shop row — never ship raw E.164 to the browser."""
+    out = dict(shop)
+    phone = out.pop("phone_e164", None)
+    out["phone_masked"] = live_call.mask_phone(phone)
+    return out
+
+
+def _pending_leg_public(request: dict) -> dict:
+    """Advisory chain plan for the UI: masked phone, no synthesized consent."""
+    return {
+        "call_type": request["call_type"],
+        "shop_id": request["shop_id"],
+        "phone_masked": live_call.mask_phone(request.get("phone")),
+        "requires_authorization": True,
+        "requires_vendor_authorization": request["call_type"] == "vendor_order",
+        "request_id": request.get("request_id"),
+        "vendor_display_name": request.get("vendor_display_name"),
+        "low_stock_items": request.get("low_stock_items"),
+        "order_items": request.get("order_items"),
+        "order_status_known": request.get("order_status_known"),
+    }
+
+
+def _is_loopback_host(host: str) -> bool:
+    return host.strip().lower().split("%")[0] in LOOPBACK_HOSTS
+
+
+def _loopback_origins(port: int) -> set[str]:
+    return {
+        f"http://127.0.0.1:{port}",
+        f"http://localhost:{port}",
+        f"http://[::1]:{port}",
+    }
+
+
+def _redact_transcript(turns: list[dict]) -> list[dict]:
+    out = []
+    for turn in turns:
+        item = dict(turn)
+        if "text" in item:
+            item["text"] = live_call.redact_phones(item.get("text"))
+        out.append(item)
+    return out
 
 
 def build_request(shop: dict, body: dict) -> dict:
@@ -508,15 +561,21 @@ def build_request(shop: dict, body: dict) -> dict:
         products = [p["name"] for p in shop.get("products", [])]
     if not products:
         raise ApiError(400, "Add at least one product to ask about.")
+    if not body.get("consent"):
+        raise ApiError(400, "Consent must be recorded before a call can be placed.")
+    try:
+        phone = live_call.validate_e164(shop.get("phone_e164") or shop.get("phone"))
+    except live_call.LiveCallError as exc:
+        raise ApiError(400, str(exc)) from exc
     return {
         "workflow_id": body.get("workflow_id") or f"console-{uuid.uuid4().hex[:8]}",
         "call_type": body.get("call_type") or "inventory",
-        "phone": shop["phone_e164"],
+        "phone": phone,
         "region": shop["region"],
         "locale": shop["locale"],
         "currency": shop["currency"],
         "shop_id": shop["id"],
-        "recipient_consented": True,
+        "recipient_consented": True,  # only after body.consent above
         "language_style": body.get("language_style")
                           or shop.get("language_style") or VOICES[0]["style"],
         "products_to_ask": products,
@@ -547,7 +606,6 @@ def _next_chain_requests(request: dict, result: dict, shop: dict, conn) -> list[
             "call_type": "reorder_offer", "phone": shop["phone_e164"],
             "region": shop["region"], "locale": shop["locale"],
             "currency": shop["currency"], "shop_id": shop["id"],
-            "recipient_consented": True,
             "language_style": shop.get("language_style") or VOICES[0]["style"],
             "low_stock_items": low, "max_minutes": 4,
         }]
@@ -585,7 +643,6 @@ def _next_chain_requests(request: dict, result: dict, shop: dict, conn) -> list[
                 # scope for the demo.
                 "region": shop["region"], "locale": shop["locale"],
                 "currency": shop["currency"], "shop_id": shop["id"],
-                "recipient_consented": True,
                 "vendor_display_name": vendor_name,
                 "order_items": [
                     " ".join(str(x) for x in
@@ -617,7 +674,7 @@ def _next_chain_requests(request: dict, result: dict, shop: dict, conn) -> list[
             "call_type": "order_status", "phone": shop["phone_e164"],
             "region": shop["region"], "locale": shop["locale"],
             "currency": shop["currency"], "shop_id": shop["id"],
-            "recipient_consented": True, "request_id": order_id, "max_minutes": 2,
+            "request_id": order_id, "max_minutes": 2,
             "order_status_known": order["status"],
             "order_amount": order["amount"], "order_eta_text": order["eta_text"],
         }]
@@ -679,21 +736,20 @@ def start_checkin(body: dict) -> dict:
                                       request["call_type"], call_date)
                if body.get("again") else 1)
 
-    # This is the one human action in the whole chain (see CHAIN_CAP above):
-    # everything reorder_offer/vendor_order/order_status do after this is
-    # fired automatically, with no further confirmation.
+    # Live: only this check-in is authorized here. Follow-up procurement legs
+    # stay advisory until POST /api/checkins/approve. Demo may auto-rehearse.
     key = _launch(request, call_date, api_key, attempt=attempt)
     if key is None:  # unreachable for a fresh chain — CHAIN_CAP starts at 0
         raise ApiError(500, "Could not start the chain.")
     return {"key": key, "demo": DEMO, "attempt": attempt, "chain_id": key}
 
 
-def retry_order_status(order_id: str) -> dict:
-    """Re-fire just the owner status callback for an order, without redialling
-    the vendor. Only makes sense when the vendor call already succeeded and
-    this leg alone failed (e.g. the task-creation rejection this fixes) —
-    the outcome it reports comes from the order row, not a fresh vendor call.
+def retry_order_status(order_id: str, body: dict | None = None) -> dict:
+    """Queue (live) or launch (demo) an owner status callback for an order.
+
+    Live mode does not dial until the operator approves with explicit consent.
     """
+    body = body or {}
     order_id = str(order_id or "").strip()
     if not order_id:
         raise ApiError(400, "order_id is required.")
@@ -721,13 +777,21 @@ def retry_order_status(order_id: str) -> dict:
         "call_type": "order_status", "phone": shop["phone_e164"],
         "region": shop["region"], "locale": shop["locale"],
         "currency": shop["currency"], "shop_id": shop["id"],
-        "recipient_consented": True, "request_id": order_id, "max_minutes": 2,
+        "request_id": order_id, "max_minutes": 2,
         "order_status_known": order["status"],
         "order_amount": order["amount"], "order_eta_text": order["eta_text"],
     }
     call_date = date.today().isoformat()
-    # A retry is its own chain, not a continuation of the one that failed —
-    # order_status is terminal, so nothing auto-fires after it either way.
+
+    if not DEMO:
+        if not body.get("consent"):
+            raise ApiError(400,
+                "consent must be true to authorize an owner status callback. "
+                "Do not synthesize consent.")
+        request["recipient_consented"] = True
+    else:
+        request["recipient_consented"] = True
+
     key = _launch(request, call_date, api_key)
     if key is None:
         raise ApiError(500, "Could not start the retry.")
@@ -772,12 +836,12 @@ def _persist(key: str, result: dict, request: dict) -> "ingest.IngestResult":
 
 def _maybe_continue_chain(key: str, request: dict, result: dict, call_date: str,
                           api_key: str, accepted: bool) -> None:
-    """Fire the next call(s) in the Phase 2 chain, if this one calls for it.
+    """Plan or fire the next call(s) in the Phase 2 chain.
 
-    Gated on `accepted`: a rejected result (declined, low confidence, no
-    answer) carries no trustworthy structured_result, so it must not drive
-    the next call — see ingest._decide. The chain simply stops there; nothing
-    auto-retries a failed leg.
+    Gated on `accepted`: a rejected result carries no trustworthy
+    structured_result. Live mode is advisory-only — pending legs wait for
+    POST /api/checkins/approve with explicit consent. Demo sandbox may
+    auto-rehearse, attaching sandbox consent only for fixture dials.
     """
     if not accepted:
         _log(f"{request.get('shop_id')}/{request.get('call_type')}: result not accepted "
@@ -793,14 +857,95 @@ def _maybe_continue_chain(key: str, request: dict, result: dict, call_date: str,
         next_requests = _next_chain_requests(request, result, rows[0], conn)
     finally:
         conn.close()
+    if not next_requests:
+        return
+
+    if not DEMO:
+        # Live: surface the plan; do not dial vendor/callback without approval.
+        pending = []
+        with RUNS_LOCK:
+            stored = []
+            for leg in next_requests:
+                stored.append(dict(leg))
+                pending.append(_pending_leg_public(leg))
+            RUNS[key]["pending_next"] = pending
+            RUNS[key]["pending_requests"] = stored
+            RUNS[key]["chain_advisory"] = True
+        _log(f"{request.get('shop_id')}/{request.get('call_type')}: live procurement is "
+            f"advisory-only — {len(pending)} pending leg(s); POST /api/checkins/approve")
+        return
+
     capped = False
     for next_request in next_requests:
-        new_key = _launch(next_request, call_date, api_key,
+        # Demo sandbox only: fixture path, not a real recipient consent claim.
+        demo_req = {**next_request, "recipient_consented": True}
+        if demo_req["call_type"] == "vendor_order":
+            demo_req["vendor_contact_authorized"] = True
+        new_key = _launch(demo_req, call_date, api_key,
                           chain_id=chain_id, parent_key=key)
         if new_key is None:
             capped = True
     if capped:
         _set(key, chain_capped=True)
+
+
+def approve_next(body: dict) -> dict:
+    """Operator-bound approval to dial one pending live chain leg."""
+    if DEMO:
+        raise ApiError(400, "Approve is for live mode; demo auto-rehearses the chain.")
+    if not body.get("consent"):
+        raise ApiError(400, "consent must be true to authorize the next call.")
+    parent_key = str(body.get("parent_key") or "").strip()
+    if not parent_key:
+        raise ApiError(400, "parent_key is required.")
+    try:
+        index = int(body.get("leg_index", 0))
+    except (TypeError, ValueError) as exc:
+        raise ApiError(400, "leg_index must be an integer.") from exc
+
+    with RUNS_LOCK:
+        parent = RUNS.get(parent_key)
+        if not parent:
+            raise ApiError(404, f"No run with key {parent_key!r}.")
+        pending = list(parent.get("pending_requests") or [])
+        if index < 0 or index >= len(pending):
+            raise ApiError(400, "leg_index is out of range for pending_next.")
+        leg = dict(pending[index])
+        call_date = body.get("call_date") or date.today().isoformat()
+        api_key = os.environ.get("CALLE_API_KEY")
+        chain_id = parent.get("chain_id", parent_key)
+
+    if not api_key:
+        raise ApiError(400, "CALLE_API_KEY is not set on the server.")
+
+    try:
+        live_call.validate_e164(leg.get("phone"))
+    except live_call.LiveCallError as exc:
+        raise ApiError(400, str(exc)) from exc
+
+    if leg["call_type"] == "vendor_order":
+        if not body.get("vendor_contact_authorized"):
+            raise ApiError(400,
+                "vendor_contact_authorized must be true before dialing a vendor. "
+                "Do not reuse the shop owner's check-in consent.")
+        leg["vendor_contact_authorized"] = True
+
+    leg["recipient_consented"] = True
+    key = _launch(leg, call_date, api_key, chain_id=chain_id, parent_key=parent_key)
+    if key is None:
+        raise ApiError(429, "Chain cap reached; no further calls in this chain.")
+
+    with RUNS_LOCK:
+        parent = RUNS.get(parent_key) or {}
+        remaining = list(parent.get("pending_requests") or [])
+        if 0 <= index < len(remaining):
+            remaining.pop(index)
+        parent["pending_requests"] = remaining
+        parent["pending_next"] = [_pending_leg_public(r) for r in remaining]
+        RUNS[parent_key] = parent
+
+    _log(f"{leg.get('shop_id')}/{leg.get('call_type')}: approved → launched {key}")
+    return {"key": key, "demo": False, "parent_key": parent_key, "call_type": leg["call_type"]}
 
 
 def _live_run(key: str, request: dict, call_date: str, api_key: str, attempt: int = 1):
@@ -826,7 +971,7 @@ def _live_run(key: str, request: dict, call_date: str, api_key: str, attempt: in
         _set(key, done=True)
     except Exception as exc:                       # surfaced to the operator
         traceback.print_exc()
-        _set(key, done=True, phase="failed", error=str(exc))
+        _set(key, done=True, phase="failed", error=live_call.redact_phones(str(exc)))
 
 
 def _demo_fixture_for(request: dict) -> dict | None:
@@ -937,6 +1082,40 @@ class Handler(BaseHTTPRequestHandler):
         self._send(status, json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"),
                    "application/json; charset=utf-8")
 
+    def _console_origin_ok(self) -> bool:
+        """Reject cross-origin mutating controls against the loopback console."""
+        port = SERVER_PORT
+        allowed = _loopback_origins(port)
+        origin = (self.headers.get("Origin") or "").strip()
+        referer = (self.headers.get("Referer") or "").strip()
+        host = (self.headers.get("Host") or "").split(":")[0].strip().lower()
+        if host and host not in LOOPBACK_HOSTS and os.environ.get("SHOPVOICE_ALLOW_REMOTE") != "1":
+            return False
+        if origin:
+            return origin in allowed
+        if referer:
+            return any(referer.startswith(o + "/") or referer == o for o in allowed)
+        # Same-origin navigations and curl without Origin: require loopback peer.
+        peer = self.client_address[0] if self.client_address else ""
+        return peer in ("127.0.0.1", "::1", "localhost")
+
+    def _remote_authorized(self) -> bool:
+        if os.environ.get("SHOPVOICE_ALLOW_REMOTE") != "1":
+            return True
+        expected = os.environ.get("SHOPVOICE_REMOTE_TOKEN") or ""
+        if not expected:
+            return False
+        return (self.headers.get("X-ShopVoice-Token") or "") == expected
+
+    def _authorize_mutation(self) -> bool:
+        if not self._console_origin_ok():
+            self._json(403, {"error": "Cross-origin or non-loopback console controls are refused."})
+            return False
+        if not self._remote_authorized():
+            self._json(401, {"error": "Remote console requires X-ShopVoice-Token."})
+            return False
+        return True
+
     def _static(self, path: str):
         name = "index.html" if path in ("/", "") else path.lstrip("/")
         target = (STATIC / name).resolve()
@@ -962,11 +1141,12 @@ class Handler(BaseHTTPRequestHandler):
                     "regions": SUPPORTED, "blocked": sorted(BLOCKED),
                     "currencies": CURRENCIES, "units": UNITS,
                     "countries": countries(), "voices": VOICES,
+                    "loopback_only": _is_loopback_host(SERVER_HOST),
                 })
             if parts == ["customers"]:
-                return self._json(200, {"customers": customers()})
+                return self._json(200, {"customers": [_public_shop(c) for c in customers()]})
             if len(parts) == 2 and parts[0] == "customers":
-                return self._json(200, customer(parts[1]))
+                return self._json(200, _public_shop(customer(parts[1])))
             if len(parts) == 3 and parts[0] == "customers" and parts[2] == "calls":
                 ledger = calls_for(parts[1])
                 seen = {c["call_id"] for c in ledger}
@@ -980,12 +1160,11 @@ class Handler(BaseHTTPRequestHandler):
                     "date": date.today().isoformat(),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "outcome": "running", "phase": r.get("phase"),
-                    # Same fix as run_status(): don't show the stale
-                    # progress-callback snapshot, compute it live.
                     "elapsed": round(time.time() - r["started"], 1) if r.get("started") else 0,
                     "accepted": 0, "confidence": None, "products": [], "low": 0,
                     "chain_id": r.get("chain_id"), "chain_position": r.get("chain_position"),
                     "parent_key": r.get("parent_key"), "next_keys": r.get("next_keys", []),
+                    "pending_next": r.get("pending_next") or [],
                 } for r in live]
                 unrecorded = [
                     {**a, "accepted": 0, "confidence": None, "products": [], "low": 0,
@@ -1005,16 +1184,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, run_status(parts[1]))
             self._json(404, {"error": "Unknown endpoint."})
         except ApiError as exc:
-            self._json(exc.status, {"error": exc.message})
+            self._json(exc.status, {"error": live_call.redact_phones(exc.message)})
         except Exception as exc:
             traceback.print_exc()
-            self._json(500, {"error": str(exc)})
+            self._json(500, {"error": live_call.redact_phones(str(exc))})
 
     do_HEAD = do_GET
 
     def do_POST(self):
         route = urlparse(self.path).path
         try:
+            if not self._authorize_mutation():
+                return
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}") if length else {}
             parts = [p for p in route[5:].split("/") if p] if route.startswith("/api/") else []
@@ -1022,16 +1203,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, save_customer(body))
             if parts == ["checkins"]:
                 return self._json(202, start_checkin(body))
+            if parts == ["checkins", "approve"]:
+                return self._json(202, approve_next(body))
             if len(parts) == 3 and parts[0] == "orders" and parts[2] == "retry-status":
-                return self._json(202, retry_order_status(parts[1]))
+                return self._json(202, retry_order_status(parts[1], body))
             self._json(404, {"error": "Unknown endpoint."})
         except ApiError as exc:
-            self._json(exc.status, {"error": exc.message})
+            self._json(exc.status, {"error": live_call.redact_phones(exc.message)})
         except json.JSONDecodeError:
             self._json(400, {"error": "Body must be JSON."})
         except Exception as exc:
             traceback.print_exc()
-            self._json(500, {"error": str(exc)})
+            self._json(500, {"error": live_call.redact_phones(str(exc))})
 
 
 def _watch_and_reload():
@@ -1072,8 +1255,23 @@ def _watch_and_reload():
 
 
 def main() -> int:
-    host = os.environ.get("SHOPVOICE_HOST", "127.0.0.1")
-    port = int(os.environ.get("SHOPVOICE_PORT", "8765"))
+    host = SERVER_HOST
+    port = SERVER_PORT
+    if not _is_loopback_host(host):
+        if os.environ.get("SHOPVOICE_ALLOW_REMOTE") != "1":
+            print(
+                f"Refusing non-loopback bind {host!r}. "
+                "Set SHOPVOICE_HOST=127.0.0.1 (default), or set "
+                "SHOPVOICE_ALLOW_REMOTE=1 and SHOPVOICE_REMOTE_TOKEN.",
+                file=sys.stderr,
+            )
+            return 1
+        if not os.environ.get("SHOPVOICE_REMOTE_TOKEN"):
+            print(
+                "Remote bind requires SHOPVOICE_REMOTE_TOKEN for mutating API calls.",
+                file=sys.stderr,
+            )
+            return 1
     conn = _conn()
     conn.close()
     mode = "DEMO replay" if DEMO else ("live" if os.environ.get("CALLE_API_KEY") else "read only")
@@ -1083,6 +1281,7 @@ def main() -> int:
     print(f"Shop Check-In console on http://{host}:{port}")
     print(f"  ledger  {DB_PATH}")
     print(f"  mode    {mode}")
+    print(f"  bind    {'loopback' if _is_loopback_host(host) else 'remote-token'}")
     print(f"  started {STARTED_AT}"
           + ("  (auto-reload on)" if os.environ.get("SHOPVOICE_RELOAD") == "1" else ""))
     if not os.environ.get("CALLE_API_KEY") and not DEMO:
