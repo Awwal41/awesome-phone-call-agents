@@ -44,7 +44,8 @@ When restock workflows are enabled (issues P2–P5):
 1. **Owner must say yes** before any vendor is contacted. Low stock alone never auto-orders.
 2. **Per-vendor authorization** — the owner must authorize contacting that specific vendor (or confirm a saved vendor by name).
 3. **Separate consent for status callbacks** — calling the owner back with ETA/status needs explicit opt-in (can be part of the restock yes).
-4. **Preview by default** — live vendor dials and owner callbacks require the same dual flags as owner check-ins (`--execute --confirm-recipient-opt-in`) plus request-level consent fields.
+4. **Preview by default** — live vendor dials and owner callbacks require the same dual flags as owner check-ins (`--execute --confirm-recipient-opt-in`) plus request-level consent fields. Vendor dials also require `--confirm-vendor-order` and `vendor_contact_authorized` — never synthesize vendor consent from the shop owner's check-in opt-in.
+5. **Live console is advisory** — after the first authorized check-in, the web console plans reorder / vendor / status legs but does not dial them until `POST /api/checkins/approve` with explicit per-recipient authorization. `SHOPVOICE_DEMO=1` may auto-rehearse with fixtures only.
 5. **No recurring auto-orders** — each restock request is one-shot unless the host scheduler creates a new confirmed job with a cancel path.
 6. Vendor and callback calls are **separate** from inventory/sales check-ins; do not combine them into one CALL-E task.
 

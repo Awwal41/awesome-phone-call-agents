@@ -456,6 +456,8 @@ def list_vendors(conn: sqlite3.Connection, *, shop_id: str) -> list[dict]:
         item["phone_masked"] = mask_phone(item.get("phone_e164"))
         item["payee_ref_masked"] = mask_payee_ref(item.get("payee_ref"))
         item["goods"] = json.loads(item.get("goods_json") or "[]")
+        item.pop("phone_e164", None)
+        item.pop("payee_ref", None)
         out.append(item)
     return out
 

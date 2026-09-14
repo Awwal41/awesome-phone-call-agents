@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -39,6 +40,13 @@ CHECKPOINT_VERSION = 1
 POLL_INTERVAL_SECONDS = 5.0
 PROGRESS_HEARTBEAT_SECONDS = 30.0
 DEFAULT_TIMEOUT_SECONDS = 600.0
+
+# E.164: leading +, country code non-zero, 8–15 digits total (ITU-T E.164).
+E164_RE = re.compile(r"^\+[1-9]\d{7,14}$")
+# Spoken or printed numbers that may appear in transcripts / error text.
+PHONE_IN_TEXT_RE = re.compile(
+    r"(?<!\w)(?:\+|00)?(?:\d[\s\-().]*){8,15}\d(?!\w)"
+)
 
 # Statuses CALL-E can end on. Mirrors ingest.TERMINAL_WITHOUT_DATA plus success.
 TERMINAL_STATUSES = {
@@ -183,21 +191,103 @@ def request_idempotency_key(ledger_key: str, *, now: float | None = None) -> str
     return f"{ledger_key}-{stamp}-{secrets.token_hex(3)}"
 
 
+def validate_e164(phone: str | None) -> str:
+    """Require a strict E.164 recipient. Never invent or coerce a number."""
+    raw = str(phone or "").strip()
+    if not E164_RE.fullmatch(raw):
+        raise LiveCallError(
+            "recipient phone must be E.164 (e.g. +2348000000000); "
+            "got a value that is missing, local-only, or malformed."
+        )
+    return raw
+
+
 def build_recipients(request: dict) -> list[dict]:
     for field in ("phone", "region", "locale"):
         if not request.get(field):
             raise LiveCallError(
                 f"request is missing {field!r} — never guess phone, region, or locale"
             )
+    phone = validate_e164(request["phone"])
     return [{
-        "phones": [request["phone"]],
+        "phones": [phone],
         "region": request["region"],
         "locale": request["locale"],
     }]
 
 
-def mask_phone(phone: str) -> str:
-    return phone[:6] + "****" + phone[-2:] if len(phone) > 8 else "****"
+def mask_phone(phone: str | None) -> str:
+    """Mask an E.164 number for logs and API output. Never invent digits."""
+    if not phone:
+        return ""
+    digits = "".join(c for c in str(phone) if c.isdigit())
+    if len(digits) < 4:
+        return "***"
+    return f"+{'*' * (len(digits) - 4)}{digits[-4:]}"
+
+
+def redact_phones(text: str | None) -> str:
+    """Strip phone-shaped substrings from transcripts and error strings."""
+    if not text:
+        return ""
+    return PHONE_IN_TEXT_RE.sub("[phone]", str(text))
+
+
+def mask_recipients(recipients: Any) -> Any:
+    """Return a copy of CALL-E recipients with phones masked."""
+    if not isinstance(recipients, list):
+        return recipients
+    out = []
+    for entry in recipients:
+        if not isinstance(entry, dict):
+            out.append(entry)
+            continue
+        item = dict(entry)
+        phones = item.get("phones")
+        if isinstance(phones, list):
+            item["phones"] = [mask_phone(p) for p in phones]
+        out.append(item)
+    return out
+
+
+def public_result(result: dict) -> dict:
+    """CLI/API-safe copy of an ingest-shaped result (phones masked)."""
+    shaped = dict(result)
+    if "recipients" in shaped:
+        shaped["recipients"] = mask_recipients(shaped.get("recipients"))
+    return shaped
+
+
+def _http_status(exc: BaseException) -> int | None:
+    for attr in ("status_code", "status", "http_status"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int):
+            return value
+    response = getattr(exc, "response", None)
+    if response is not None:
+        for attr in ("status_code", "status"):
+            value = getattr(response, attr, None)
+            if isinstance(value, int):
+                return value
+    return None
+
+
+def is_definitive_create_rejection(exc: BaseException) -> bool:
+    """True only when CALL-E clearly refused and no call could exist.
+
+    4xx client errors (invalid key burned, validation, auth) may mint a fresh
+    key. Timeouts, 5xx, and transport failures are ambiguous — the create may
+    have landed — so the reserved key must be preserved.
+    """
+    status = _http_status(exc)
+    if status is not None:
+        return 400 <= status < 500
+    message = str(exc).lower()
+    if any(token in message for token in ("timeout", "timed out", "temporarily", "503", "502", "500")):
+        return False
+    return any(token in message for token in (
+        "rejected", "unauthorized", "forbidden", "bad request", "invalid", "not supported",
+    ))
 
 
 # --------------------------------------------------------------------------
@@ -303,7 +393,7 @@ def to_ingest_shape(call: Any, request: dict, *, call_date: str, key: str) -> di
     }
     recipients = raw.get("recipients")
     if recipients:
-        shaped["recipients"] = recipients
+        shaped["recipients"] = mask_recipients(recipients)
     return shaped
 
 
@@ -389,12 +479,15 @@ def execute_live(request: dict, client: Any, *, task: str, schema: dict,
                 sleep=sleep, monotonic=monotonic, progress=progress)
     else:
         recipients = build_recipients(request)
-        # Reuse the key from an interrupted attempt: we cannot tell whether
-        # `create` landed, and letting CALL-E dedupe is the safe side of that
-        # doubt. Mint a fresh one only when CALL-E explicitly refused, because
-        # then no call exists and the old key is already burned.
+        # Reuse the key from an interrupted or ambiguous attempt: we cannot
+        # tell whether `create` landed, and letting CALL-E dedupe is the safe
+        # side of that doubt. Mint a fresh one only when CALL-E explicitly
+        # refused (create_rejected), because then no call exists and the old
+        # key is already burned.
         previous = state.get("request_idempotency_key")
-        if isinstance(previous, str) and previous and state.get("phase") == "reserved":
+        phase = state.get("phase")
+        if (isinstance(previous, str) and previous
+                and phase != "create_rejected"):
             request_key = previous
         else:
             request_key = request_idempotency_key(key)
@@ -414,24 +507,42 @@ def execute_live(request: dict, client: Any, *, task: str, schema: dict,
                 idempotency_key=request_key,
             )
         except Exception as exc:
-            # Record that CALL-E refused, so a corrected retry knows no call
-            # was placed and is free to mint a new key instead of colliding.
-            write_checkpoint(checkpoint, {
-                "phase": "create_rejected",
-                "provider_account_hash": provider_hash,
-                "idempotency_key": key,
-                "request_idempotency_key": request_key,
-                "error": str(exc)[:300],
-                "updated_at": _now(),
-            })
+            safe_error = redact_phones(str(exc))[:300]
+            if is_definitive_create_rejection(exc):
+                # CALL-E refused: no call was placed; a corrected retry may
+                # mint a new key instead of colliding.
+                write_checkpoint(checkpoint, {
+                    "phase": "create_rejected",
+                    "provider_account_hash": provider_hash,
+                    "idempotency_key": key,
+                    "request_idempotency_key": request_key,
+                    "error": safe_error,
+                    "updated_at": _now(),
+                })
+            else:
+                # Timeout / 5xx / transport: keep the reserved key so a rerun
+                # presents the same idempotency key to CALL-E.
+                write_checkpoint(checkpoint, {
+                    "phase": "reserved",
+                    "provider_account_hash": provider_hash,
+                    "idempotency_key": key,
+                    "request_idempotency_key": request_key,
+                    "masked_phone": mask_phone(request["phone"]),
+                    "error": safe_error,
+                    "updated_at": _now(),
+                })
             raise
         call_id = _field(created, "id") or _field(created, "call_id")
         if not isinstance(call_id, str) or not call_id:
+            # Ambiguous: create may have succeeded server-side. Preserve the
+            # reserved key — never relabel as rejected.
             write_checkpoint(checkpoint, {
-                "phase": "create_failed",
+                "phase": "create_unknown",
                 "provider_account_hash": provider_hash,
                 "idempotency_key": key,
                 "request_idempotency_key": request_key,
+                "masked_phone": mask_phone(request["phone"]),
+                "error": "create response carried no call id",
                 "updated_at": _now(),
             })
             raise LiveCallError("CALL-E create response carried no call id.")
