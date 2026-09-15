@@ -41,11 +41,12 @@ POLL_INTERVAL_SECONDS = 5.0
 PROGRESS_HEARTBEAT_SECONDS = 30.0
 DEFAULT_TIMEOUT_SECONDS = 600.0
 
-# E.164: leading +, country code non-zero, 8–15 digits total (ITU-T E.164).
-E164_RE = re.compile(r"^\+[1-9]\d{7,14}$")
+# E.164: ASCII only — leading +, country code non-zero, 8–15 digits (ITU-T).
+E164_RE = re.compile(r"^\+[1-9]\d{7,14}$", re.ASCII)
 # Spoken or printed numbers that may appear in transcripts / error text.
 PHONE_IN_TEXT_RE = re.compile(
-    r"(?<!\w)(?:\+|00)?(?:\d[\s\-().]*){8,15}\d(?!\w)"
+    r"(?<!\w)(?:\+|00)?(?:\d[\s\-().]*){8,15}\d(?!\w)",
+    re.ASCII,
 )
 
 # Statuses CALL-E can end on. Mirrors ingest.TERMINAL_WITHOUT_DATA plus success.
@@ -191,13 +192,21 @@ def request_idempotency_key(ledger_key: str, *, now: float | None = None) -> str
     return f"{ledger_key}-{stamp}-{secrets.token_hex(3)}"
 
 
+def require_true(value: Any, field: str) -> None:
+    """Bound approval: only the boolean True counts. Truthy strings do not."""
+    if value is not True:
+        raise LiveCallError(
+            f"{field} must be the boolean true (not a string or other truthy value)."
+        )
+
+
 def validate_e164(phone: str | None) -> str:
-    """Require a strict E.164 recipient. Never invent or coerce a number."""
+    """Require a strict ASCII E.164 recipient. Never invent or coerce a number."""
     raw = str(phone or "").strip()
     if not E164_RE.fullmatch(raw):
         raise LiveCallError(
             "recipient phone must be E.164 (e.g. +2348000000000); "
-            "got a value that is missing, local-only, or malformed."
+            "got a value that is missing, local-only, non-ASCII, or malformed."
         )
     return raw
 
@@ -250,12 +259,40 @@ def mask_recipients(recipients: Any) -> Any:
     return out
 
 
+_PHONE_KEYS = frozenset({
+    "phone", "phones", "phone_e164", "masked_phone", "to", "from",
+})
+
+
+def deep_redact(obj: Any) -> Any:
+    """Recursively mask phones in nested provider payloads, notes, and traces."""
+    if isinstance(obj, str):
+        return redact_phones(obj)
+    if isinstance(obj, list):
+        return [deep_redact(item) for item in obj]
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        for key, value in obj.items():
+            lower = str(key).lower()
+            if lower in _PHONE_KEYS or lower.endswith("_phone") or lower.endswith("phone"):
+                if isinstance(value, str):
+                    out[key] = mask_phone(value)
+                elif isinstance(value, list):
+                    out[key] = [
+                        mask_phone(v) if isinstance(v, str) else deep_redact(v)
+                        for v in value
+                    ]
+                else:
+                    out[key] = deep_redact(value)
+            else:
+                out[key] = deep_redact(value)
+        return out
+    return obj
+
+
 def public_result(result: dict) -> dict:
-    """CLI/API-safe copy of an ingest-shaped result (phones masked)."""
-    shaped = dict(result)
-    if "recipients" in shaped:
-        shaped["recipients"] = mask_recipients(shaped.get("recipients"))
-    return shaped
+    """CLI/API-safe copy of an ingest-shaped result (nested phones masked)."""
+    return deep_redact(dict(result))
 
 
 def _http_status(exc: BaseException) -> int | None:
@@ -273,21 +310,16 @@ def _http_status(exc: BaseException) -> int | None:
 
 
 def is_definitive_create_rejection(exc: BaseException) -> bool:
-    """True only when CALL-E clearly refused and no call could exist.
+    """True only when the provider returned an observed HTTP 4xx refusal.
 
-    4xx client errors (invalid key burned, validation, auth) may mint a fresh
-    key. Timeouts, 5xx, and transport failures are ambiguous — the create may
-    have landed — so the reserved key must be preserved.
+    Exception message words such as "invalid" or "rejected" alone must not
+    authorize a fresh idempotency key — the create may still have landed.
+    Timeouts, 5xx, and transport failures are always ambiguous.
     """
     status = _http_status(exc)
-    if status is not None:
-        return 400 <= status < 500
-    message = str(exc).lower()
-    if any(token in message for token in ("timeout", "timed out", "temporarily", "503", "502", "500")):
+    if status is None:
         return False
-    return any(token in message for token in (
-        "rejected", "unauthorized", "forbidden", "bad request", "invalid", "not supported",
-    ))
+    return 400 <= status < 500
 
 
 # --------------------------------------------------------------------------
@@ -457,10 +489,10 @@ def execute_live(request: dict, client: Any, *, task: str, schema: dict,
     `request_id` (the order_id) is required for `vendor_order` and
     `order_status` — see REQUEST_KEYED_CALL_TYPES.
     """
-    if not request.get("recipient_consented"):
+    if request.get("recipient_consented") is not True:
         raise LiveCallError(
-            "request.recipient_consented is not true — the recipient must opt "
-            "in before any live call."
+            "request.recipient_consented must be the boolean true — the "
+            "recipient must opt in before any live call."
         )
 
     call_date = call_date or date.today().isoformat()

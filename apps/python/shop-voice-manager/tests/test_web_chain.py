@@ -330,7 +330,13 @@ def test_approve_next_requires_vendor_authorization(monkeypatch):
             "pending_next": [server._pending_leg_public(leg)],
         }
 
-    with pytest.raises(server.ApiError, match="vendor_contact_authorized"):
+    with pytest.raises(server.ApiError, match="boolean true"):
+        server.approve_next({
+            "parent_key": "parent", "leg_index": 0,
+            "consent": True, "vendor_contact_authorized": "yes",
+        })
+
+    with pytest.raises(server.ApiError, match="boolean true"):
         server.approve_next({"parent_key": "parent", "leg_index": 0, "consent": True})
 
     out = server.approve_next({
@@ -340,6 +346,14 @@ def test_approve_next_requires_vendor_authorization(monkeypatch):
     assert out["key"] == "new-key"
     assert launched[0]["recipient_consented"] is True
     assert launched[0]["vendor_contact_authorized"] is True
+
+
+def test_truthy_consent_string_is_rejected():
+    with pytest.raises(server.ApiError, match="boolean true"):
+        server._require_true({"consent": "true"}, "consent")
+    with pytest.raises(server.ApiError, match="boolean true"):
+        server._require_true({"consent": 1}, "consent")
+    server._require_true({"consent": True}, "consent")
 
 
 def test_public_shop_masks_phone():

@@ -427,11 +427,16 @@ def call_detail(call_id: str) -> dict:
         structured = payload.get("structured_result") or {}
         detail["transcript"] = _redact_transcript(transcript_of(payload))
         detail["duration"] = duration_of(payload)
-        detail["evidence"] = payload.get("evidence") or []
-        detail["notes"] = structured.get("owner_notes") or ""
+        detail["evidence"] = live_call.deep_redact(payload.get("evidence") or [])
+        detail["notes"] = live_call.redact_phones(structured.get("owner_notes") or "")
         detail["top_sellers"] = structured.get("top_sellers") or []
         detail["procurement"] = structured.get("procurement_items") or []
         detail["raw_products"] = structured.get("products") or []
+        # Nested provider projection for the UI — never ship raw phones.
+        detail["provider"] = live_call.public_result({
+            k: payload[k] for k in payload
+            if k in ("task", "structured_result", "recipients", "notes", "evidence")
+        })
     if detail.get("shop_id"):
         try:
             detail["currency"] = customer(detail["shop_id"])["currency"]
@@ -554,6 +559,12 @@ def _redact_transcript(turns: list[dict]) -> list[dict]:
     return out
 
 
+def _require_true(body: dict, field: str) -> None:
+    """Strict boolean approval — truthy strings must not synthesize consent."""
+    if body.get(field) is not True:
+        raise ApiError(400, f"{field} must be the boolean true.")
+
+
 def build_request(shop: dict, body: dict) -> dict:
     """The request dict the existing CLI path already understands."""
     products = [p["name"] for p in (body.get("products") or []) if str(p.get("name") or "").strip()]
@@ -561,8 +572,7 @@ def build_request(shop: dict, body: dict) -> dict:
         products = [p["name"] for p in shop.get("products", [])]
     if not products:
         raise ApiError(400, "Add at least one product to ask about.")
-    if not body.get("consent"):
-        raise ApiError(400, "Consent must be recorded before a call can be placed.")
+    _require_true(body, "consent")
     try:
         phone = live_call.validate_e164(shop.get("phone_e164") or shop.get("phone"))
     except live_call.LiveCallError as exc:
@@ -575,7 +585,7 @@ def build_request(shop: dict, body: dict) -> dict:
         "locale": shop["locale"],
         "currency": shop["currency"],
         "shop_id": shop["id"],
-        "recipient_consented": True,  # only after body.consent above
+        "recipient_consented": True,  # only after body.consent is True above
         "language_style": body.get("language_style")
                           or shop.get("language_style") or VOICES[0]["style"],
         "products_to_ask": products,
@@ -711,8 +721,7 @@ def _launch(request: dict, call_date: str, api_key: str, *,
 
 
 def start_checkin(body: dict) -> dict:
-    if not body.get("consent"):
-        raise ApiError(400, "Consent must be recorded before a call can be placed.")
+    _require_true(body, "consent")
     shop = customer(str(body.get("shop_id") or ""))
     if shop["region"].upper() in BLOCKED:
         raise ApiError(400,
@@ -784,10 +793,7 @@ def retry_order_status(order_id: str, body: dict | None = None) -> dict:
     call_date = date.today().isoformat()
 
     if not DEMO:
-        if not body.get("consent"):
-            raise ApiError(400,
-                "consent must be true to authorize an owner status callback. "
-                "Do not synthesize consent.")
+        _require_true(body, "consent")
         request["recipient_consented"] = True
     else:
         request["recipient_consented"] = True
@@ -809,8 +815,10 @@ def _persist(key: str, result: dict, request: dict) -> "ingest.IngestResult":
     call_id = result.get("call_id")
     if call_id:
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        # Persist a masked projection — never leave raw phones on disk for logs.
         (RESULTS_DIR / f"{call_id}.json").write_text(
-            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            json.dumps(live_call.public_result(result), ensure_ascii=False, indent=2),
+            encoding="utf-8")
     conn = _conn()
     try:
         # request["phone"] is the vendor's number for vendor_order, not the
@@ -893,8 +901,7 @@ def approve_next(body: dict) -> dict:
     """Operator-bound approval to dial one pending live chain leg."""
     if DEMO:
         raise ApiError(400, "Approve is for live mode; demo auto-rehearses the chain.")
-    if not body.get("consent"):
-        raise ApiError(400, "consent must be true to authorize the next call.")
+    _require_true(body, "consent")
     parent_key = str(body.get("parent_key") or "").strip()
     if not parent_key:
         raise ApiError(400, "parent_key is required.")
@@ -924,10 +931,7 @@ def approve_next(body: dict) -> dict:
         raise ApiError(400, str(exc)) from exc
 
     if leg["call_type"] == "vendor_order":
-        if not body.get("vendor_contact_authorized"):
-            raise ApiError(400,
-                "vendor_contact_authorized must be true before dialing a vendor. "
-                "Do not reuse the shop owner's check-in consent.")
+        _require_true(body, "vendor_contact_authorized")
         leg["vendor_contact_authorized"] = True
 
     leg["recipient_consented"] = True
@@ -970,7 +974,7 @@ def _live_run(key: str, request: dict, call_date: str, api_key: str, attempt: in
         _maybe_continue_chain(key, request, result, call_date, api_key, verdict.accepted)
         _set(key, done=True)
     except Exception as exc:                       # surfaced to the operator
-        traceback.print_exc()
+        sys.stderr.write(live_call.redact_phones(traceback.format_exc()))
         _set(key, done=True, phase="failed", error=live_call.redact_phones(str(exc)))
 
 
@@ -1107,7 +1111,8 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return (self.headers.get("X-ShopVoice-Token") or "") == expected
 
-    def _authorize_mutation(self) -> bool:
+    def _authorize_api(self) -> bool:
+        """Protect private records (GET and POST) on loopback/remote consoles."""
         if not self._console_origin_ok():
             self._json(403, {"error": "Cross-origin or non-loopback console controls are refused."})
             return False
@@ -1133,6 +1138,7 @@ class Handler(BaseHTTPRequestHandler):
             if not route.startswith("/api/"):
                 return self._static(route)
             parts = [p for p in route[5:].split("/") if p]
+            # Public: mode/config only. Customer, call, and run records need auth.
             if parts == ["config"]:
                 return self._json(200, {
                     "live": bool(os.environ.get("CALLE_API_KEY")),
@@ -1143,6 +1149,8 @@ class Handler(BaseHTTPRequestHandler):
                     "countries": countries(), "voices": VOICES,
                     "loopback_only": _is_loopback_host(SERVER_HOST),
                 })
+            if not self._authorize_api():
+                return
             if parts == ["customers"]:
                 return self._json(200, {"customers": [_public_shop(c) for c in customers()]})
             if len(parts) == 2 and parts[0] == "customers":
@@ -1186,7 +1194,7 @@ class Handler(BaseHTTPRequestHandler):
         except ApiError as exc:
             self._json(exc.status, {"error": live_call.redact_phones(exc.message)})
         except Exception as exc:
-            traceback.print_exc()
+            sys.stderr.write(live_call.redact_phones(traceback.format_exc()))
             self._json(500, {"error": live_call.redact_phones(str(exc))})
 
     do_HEAD = do_GET
@@ -1194,7 +1202,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         route = urlparse(self.path).path
         try:
-            if not self._authorize_mutation():
+            if not self._authorize_api():
                 return
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}") if length else {}
@@ -1213,7 +1221,7 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self._json(400, {"error": "Body must be JSON."})
         except Exception as exc:
-            traceback.print_exc()
+            sys.stderr.write(live_call.redact_phones(traceback.format_exc()))
             self._json(500, {"error": live_call.redact_phones(str(exc))})
 
 

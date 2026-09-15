@@ -228,9 +228,9 @@ def run_live(args) -> int:
         )
         return 2
 
-    if not request.get("recipient_consented"):
+    if request.get("recipient_consented") is not True:
         print(
-            f"{args.request}: recipient_consented is not true. "
+            f"{args.request}: recipient_consented must be the boolean true. "
             "Do not place a call the owner has not agreed to.",
             file=sys.stderr,
         )
@@ -244,9 +244,9 @@ def run_live(args) -> int:
                 file=sys.stderr,
             )
             return 2
-        if not request.get("vendor_contact_authorized"):
+        if request.get("vendor_contact_authorized") is not True:
             print(
-                f"{args.request}: vendor_contact_authorized is not true. "
+                f"{args.request}: vendor_contact_authorized must be the boolean true. "
                 "Do not synthesize vendor consent from the shop owner's opt-in.",
                 file=sys.stderr,
             )

@@ -248,6 +248,33 @@ def test_a_refused_create_is_recorded_so_a_retry_can_use_a_new_key(tmp_path):
     assert any(w.get("phase") == "create_rejected" for w in written)
 
 
+def test_exception_words_alone_do_not_authorize_a_fresh_key(tmp_path):
+    """'invalid'/'rejected' in a message without HTTP 4xx must keep the key."""
+    class Ambiguous(StubCalls):
+        def __init__(self):
+            super().__init__()
+            self.boom = True
+
+        def create(self, **kwargs):
+            self.create_calls.append(kwargs)
+            if self.boom:
+                self.boom = False
+                raise RuntimeError("upstream said invalid request was rejected")
+            return StubCall()
+
+    client = StubClient()
+    client.calls = Ambiguous()
+    with pytest.raises(RuntimeError, match="rejected"):
+        run(client)
+
+    state = json.loads(next((tmp_path / ".call-state").rglob("*.json")).read_text(encoding="utf-8"))
+    assert state["phase"] == "reserved"
+    reserved = state["request_idempotency_key"]
+    result = run(client)
+    assert client.calls.create_calls[-1]["idempotency_key"] == reserved
+    assert result["call_id"] == "call_test_1"
+
+
 def test_timeout_or_5xx_keeps_reserved_key_for_rerun(tmp_path):
     """Ambiguous create failures must not be relabeled rejected."""
     class Flaky(StubCalls):
@@ -302,13 +329,32 @@ def test_validate_e164_rejects_local_numbers():
     assert live_call.validate_e164("+2348000000000") == "+2348000000000"
 
 
+def test_validate_e164_rejects_non_ascii_digits():
+    with pytest.raises(live_call.LiveCallError, match="E.164"):
+        live_call.validate_e164("+234８０００００００００")  # fullwidth digits
+
+
+def test_truthy_consent_strings_do_not_authorize_a_live_call():
+    client = StubClient()
+    with pytest.raises(live_call.LiveCallError, match="boolean true"):
+        run(client, {**REQUEST, "recipient_consented": "yes"})
+    assert client.calls.create_calls == []
+
+
 def test_public_result_masks_recipient_phones():
     shaped = live_call.public_result({
         "call_id": "c1",
         "recipients": [{"phones": ["+2348000000000"], "region": "NG"}],
+        "structured_result": {
+            "owner_notes": "Call me back on +2348111111111 please",
+        },
+        "task": "Dial +2348000000000 about stock",
     })
     assert shaped["recipients"][0]["phones"][0] != "+2348000000000"
     assert "*" in shaped["recipients"][0]["phones"][0]
+    assert "+2348111111111" not in shaped["structured_result"]["owner_notes"]
+    assert "+2348000000000" not in shaped["task"]
+    assert "[phone]" in shaped["structured_result"]["owner_notes"]
 
 
 def test_redact_phones_in_errors():
