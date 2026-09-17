@@ -1083,7 +1083,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _json(self, status: int, payload):
-        self._send(status, json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"),
+        # Redact only the public projection; private execution/state stays intact.
+        public_payload = live_call.deep_redact(payload)
+        self._send(status, json.dumps(public_payload, ensure_ascii=False, default=str).encode("utf-8"),
                    "application/json; charset=utf-8")
 
     def _console_origin_ok(self) -> bool:
